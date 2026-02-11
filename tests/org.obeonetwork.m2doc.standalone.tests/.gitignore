@@ -1,0 +1,7 @@
+# Test output files
+target/
+*.xlsx
+*.docx
+
+# Ignore generated files
+*-generated.*

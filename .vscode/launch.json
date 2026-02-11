@@ -1,0 +1,26 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Debug M2Spreadsheet Test",
+            "request": "launch",
+            "mainClass": "",
+            "projectName": "io.github.nheuermann.m2spreadsheet.tests",
+            "cwd": "${workspaceFolder}/tests/io.github.nheuermann.m2spreadsheet.tests"
+        },
+        {
+            "type": "java",
+            "name": "Run All M2Spreadsheet Tests",
+            "request": "launch",
+            "mainClass": "org.junit.runner.JUnitCore",
+            "args": "io.github.nheuermann.m2spreadsheet.tests.SimpleM2SpreadsheetTest",
+            "projectName": "io.github.nheuermann.m2spreadsheet.tests",
+            "classPaths": [
+                "${workspaceFolder}/tests/io.github.nheuermann.m2spreadsheet.tests/target/test-classes",
+                "${workspaceFolder}/tests/io.github.nheuermann.m2spreadsheet.tests/target/classes"
+            ],
+            "cwd": "${workspaceFolder}/tests/io.github.nheuermann.m2spreadsheet.tests"
+        }
+    ]
+}
