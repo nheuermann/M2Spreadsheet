@@ -91,8 +91,7 @@ public class M2SpreadsheetUtils {
     /**
      * Generates a spreadsheet from the given template workbook and variables.
      * 
-     * <p>This is a simplified initial implementation that processes cells containing
-     * {m:expression} patterns and replaces them with evaluated results.</p>
+     * <p>Supports for loops with syntax: {m:for var | collection} ... {m:endfor}</p>
      * 
      * @param templateWorkbook the template workbook containing expressions
      * @param queryEnvironment the AQL query environment for expression evaluation
@@ -126,27 +125,7 @@ public class M2SpreadsheetUtils {
                 Sheet templateSheet = templateWorkbook.getSheetAt(i);
                 Sheet destSheet = destinationWorkbook.createSheet(templateSheet.getSheetName());
                 
-                // Process each row
-                for (Row templateRow : templateSheet) {
-                    Row destRow = destSheet.createRow(templateRow.getRowNum());
-                    
-                    // Process each cell
-                    for (Cell templateCell : templateRow) {
-                        Cell destCell = destRow.createCell(templateCell.getColumnIndex());
-                        
-                        // Get cell content
-                        String cellContent = getCellContent(templateCell);
-                        
-                        if (cellContent != null && containsExpression(cellContent)) {
-                            // Evaluate and replace expressions
-                            String evaluated = evaluateExpressions(cellContent, variables, queryEnvironment);
-                            destCell.setCellValue(evaluated);
-                        } else if (cellContent != null) {
-                            // Copy as-is
-                            destCell.setCellValue(cellContent);
-                        }
-                    }
-                }
+                processSheet(templateSheet, destSheet, variables, queryEnvironment, result);
             }
             
             monitor.worked(80);
@@ -168,6 +147,258 @@ public class M2SpreadsheetUtils {
         }
         
         return result;
+    }
+    
+    /**
+     * Process a sheet, handling for loops and regular rows.
+     */
+    private static void processSheet(Sheet templateSheet, Sheet destSheet, 
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult result) {
+        
+        System.out.println("DEBUG: Processing sheet: " + templateSheet.getSheetName());
+        System.out.println("DEBUG: Last row num: " + templateSheet.getLastRowNum());
+        
+        int destRowNum = 0;
+        int templateRowNum = 0;
+        int lastRowNum = templateSheet.getLastRowNum();
+        
+        while (templateRowNum <= lastRowNum) {
+            Row templateRow = templateSheet.getRow(templateRowNum);
+            
+            if (templateRow == null) {
+                System.out.println("DEBUG: Row " + templateRowNum + " is null, skipping");
+                templateRowNum++;
+                continue;
+            }
+            
+            // Check if this row contains a for loop start
+            Cell firstCell = templateRow.getCell(0);
+            String firstCellContent = getCellContent(firstCell);
+            
+            System.out.println("DEBUG: Row " + templateRowNum + ", cell A content: " + firstCellContent);
+            
+            if (firstCellContent != null && isForLoopStart(firstCellContent)) {
+                System.out.println("DEBUG: Detected for loop at row " + templateRowNum);
+                // Parse for loop: {m:for var | collection}
+                ForLoopInfo forLoop = parseForLoop(firstCellContent);
+                
+                if (forLoop != null) {
+                    System.out.println("DEBUG: Parsed for loop: var=" + forLoop.varName + ", collection=" + forLoop.collectionExpr);
+                    // Find the endfor row
+                    int endforRow = findEndForRow(templateSheet, templateRowNum + 1);
+                    System.out.println("DEBUG: Found endfor at row " + endforRow);
+                    
+                    if (endforRow > templateRowNum) {
+                        // Process the for loop
+                        destRowNum = processForLoop(
+                            templateSheet, destSheet, 
+                            templateRowNum, endforRow,
+                            destRowNum, forLoop,
+                            variables, queryEnvironment, result);
+                        
+                        // Skip to after endfor
+                        templateRowNum = endforRow + 1;
+                        continue;
+                    } else {
+                        result.getValidationMessages().add(
+                            "Warning: {m:for} at row " + templateRowNum + " has no matching {m:endfor}");
+                    }
+                }
+            }
+            
+            // Regular row (no for loop)
+            System.out.println("DEBUG: Copying regular row " + templateRowNum + " to dest row " + destRowNum);
+            copyRow(templateRow, destSheet.createRow(destRowNum), variables, queryEnvironment);
+            destRowNum++;
+            templateRowNum++;
+        }
+        
+        System.out.println("DEBUG: Sheet processing complete, total dest rows: " + destRowNum);
+    }
+    
+    /**
+     * Process a for loop, repeating the body rows for each item in the collection.
+     */
+    private static int processForLoop(Sheet templateSheet, Sheet destSheet,
+            int forRowNum, int endforRowNum, int destRowNum,
+            ForLoopInfo forLoop, Map<String, Object> variables,
+            IQueryEnvironment queryEnvironment, GenerationResult result) {
+        
+        System.out.println("DEBUG: Processing for loop from row " + forRowNum + " to " + endforRowNum);
+        System.out.println("DEBUG: Variable: " + forLoop.varName + ", Collection: " + forLoop.collectionExpr);
+        
+        // Evaluate the collection expression
+        Object collectionObj;
+        try {
+            collectionObj = evaluateAqlExpression(forLoop.collectionExpr, variables, queryEnvironment);
+            System.out.println("DEBUG: Collection evaluated to: " + (collectionObj != null ? collectionObj.getClass().getName() : "null"));
+        } catch (Exception e) {
+            System.out.println("DEBUG: Failed to evaluate collection: " + e.getMessage());
+            result.getGenerationErrors().add(new Exception(
+                "Failed to evaluate for loop collection: " + forLoop.collectionExpr, e));
+            return destRowNum;
+        }
+        
+        // Convert to iterable
+        java.util.Collection<?> collection;
+        if (collectionObj instanceof java.util.Collection) {
+            collection = (java.util.Collection<?>) collectionObj;
+        } else if (collectionObj != null) {
+            collection = java.util.Collections.singletonList(collectionObj);
+        } else {
+            result.getValidationMessages().add(
+                "Warning: For loop collection is null at row " + forRowNum);
+            return destRowNum;
+        }
+        
+        System.out.println("DEBUG: Collection size: " + collection.size());
+        System.out.println("DEBUG: Body rows: " + (forRowNum + 1) + " to " + (endforRowNum - 1));
+        
+        // Iterate over collection
+        int index = 0;
+        for (Object item : collection) {
+            // Create new variable context with loop variable
+            Map<String, Object> loopVars = new java.util.HashMap<>(variables);
+            loopVars.put(forLoop.varName, item);
+            loopVars.put(forLoop.varName + "Index", index);
+            
+            if (index < 3) {  // Debug first 3 iterations
+                System.out.println("DEBUG: Iteration " + index + ", item: " + item);
+            }
+            
+            index++;
+            
+            // Copy body rows (between for and endfor)
+            for (int bodyRowNum = forRowNum + 1; bodyRowNum < endforRowNum; bodyRowNum++) {
+                Row templateRow = templateSheet.getRow(bodyRowNum);
+                if (templateRow != null) {
+                    Row destRow = destSheet.createRow(destRowNum);
+                    if (index <= 3) {  // Debug first 3
+                        System.out.println("DEBUG:   Creating dest row " + destRowNum + " from template row " + bodyRowNum);
+                    }
+                    copyRow(templateRow, destRow, loopVars, queryEnvironment);
+                    destRowNum++;
+                }
+            }
+        }
+        
+        System.out.println("DEBUG: For loop complete, final dest row: " + destRowNum);
+        return destRowNum;
+    }
+    
+    /**
+     * Copy a row from template to destination, evaluating expressions.
+     */
+    private static void copyRow(Row templateRow, Row destRow,
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment) {
+        
+        // Get the last cell index to ensure we copy all columns
+        short lastCellNum = templateRow.getLastCellNum();
+        
+        for (int cellIdx = 0; cellIdx < lastCellNum; cellIdx++) {
+            Cell templateCell = templateRow.getCell(cellIdx);
+            Cell destCell = destRow.createCell(cellIdx);
+            
+            if (templateCell == null) {
+                // Empty cell in template, create empty dest cell
+                continue;
+            }
+            
+            // Get cell content
+            String cellContent = getCellContent(templateCell);
+            
+            if (cellContent != null && containsExpression(cellContent)) {
+                // Evaluate and replace expressions
+                String evaluated = evaluateExpressions(cellContent, variables, queryEnvironment);
+                destCell.setCellValue(evaluated);
+            } else if (cellContent != null) {
+                // Copy as-is
+                destCell.setCellValue(cellContent);
+            }
+            
+            // TODO: Copy cell style properly (need to clone to destination workbook)
+            // For now, skip style copying to avoid workbook style source mismatch
+            // if (templateCell.getCellStyle() != null) {
+            //     destCell.setCellStyle(templateCell.getCellStyle());
+            // }
+        }
+        
+        // Copy row height
+        destRow.setHeight(templateRow.getHeight());
+    }
+    
+    /**
+     * Check if content is a for loop start command.
+     */
+    private static boolean isForLoopStart(String content) {
+        if (content == null) return false;
+        String trimmed = content.trim();
+        return trimmed.startsWith("{m:for ") && trimmed.endsWith("}");
+    }
+    
+    /**
+     * Check if content is a for loop end command.
+     */
+    private static boolean isForLoopEnd(String content) {
+        if (content == null) return false;
+        String trimmed = content.trim();
+        return trimmed.equals("{m:endfor}");
+    }
+    
+    /**
+     * Parse for loop command: {m:for var | collection}
+     */
+    private static ForLoopInfo parseForLoop(String content) {
+        // Remove {m:for and }
+        String inner = content.trim();
+        if (inner.startsWith("{m:for ")) {
+            inner = inner.substring(7); // Remove "{m:for "
+        }
+        if (inner.endsWith("}")) {
+            inner = inner.substring(0, inner.length() - 1);
+        }
+        
+        // Split by |
+        String[] parts = inner.split("\\|");
+        if (parts.length == 2) {
+            String varName = parts[0].trim();
+            String collectionExpr = parts[1].trim();
+            return new ForLoopInfo(varName, collectionExpr);
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Find the row containing {m:endfor}
+     */
+    private static int findEndForRow(Sheet sheet, int startRow) {
+        int lastRow = sheet.getLastRowNum();
+        for (int rowNum = startRow; rowNum <= lastRow; rowNum++) {
+            Row row = sheet.getRow(rowNum);
+            if (row != null) {
+                Cell firstCell = row.getCell(0);
+                String content = getCellContent(firstCell);
+                if (isForLoopEnd(content)) {
+                    return rowNum;
+                }
+            }
+        }
+        return -1;
+    }
+    
+    /**
+     * Data class for for loop information.
+     */
+    private static class ForLoopInfo {
+        final String varName;
+        final String collectionExpr;
+        
+        ForLoopInfo(String varName, String collectionExpr) {
+            this.varName = varName;
+            this.collectionExpr = collectionExpr;
+        }
     }
     
     /**

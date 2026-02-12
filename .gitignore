@@ -1,5 +1,6 @@
 bin/
-lib/
+lib/*
+!libs/
 target/
 *.class
 _site/
@@ -13,6 +14,9 @@ node_modules/
 *.jar
 *.war
 *.ear
+# Exception: Allow embedded JARs in libs/ for Option 3 (AQL integration)
+!libs/
+!libs/**
 
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
