@@ -45,12 +45,12 @@ public class FmeaTemplateTest {
     }
     
     /**
-     * Test FMEA template generation with for loop.
+     * Test FMEA template generation with for_row loop.
      * Template structure:
      * - Row 1: Header row
-     * - Row 2: {m:for c | fmeaEntries}
+     * - Row 2: {m:for_row c | fmeaEntries}
      * - Row 3: Data row with {m:c.field} expressions
-     * - Row 4: {m:endfor}
+     * - Row 4: {m:endfor_row}
      * 
      * Expected output:
      * - Row 1: Header row (preserved)
@@ -170,9 +170,9 @@ public class FmeaTemplateTest {
         headerRow.createCell(1).setCellValue("Component");
         headerRow.createCell(2).setCellValue("RPN");
         
-        // Row 1: for command
+        // Row 1: for_row command
         Row forRow = sheet.createRow(1);
-        forRow.createCell(0).setCellValue("{m:for entry | fmeaEntries}");
+        forRow.createCell(0).setCellValue("{m:for_row entry | fmeaEntries}");
         
         // Row 2: data template
         Row dataRow = sheet.createRow(2);
@@ -189,9 +189,9 @@ public class FmeaTemplateTest {
         System.out.println("Row 2 lastCellNum: " + dataRow.getLastCellNum());
         System.out.println("=======================\n");
         
-        // Row 3: endfor
+        // Row 3: endfor_row
         Row endforRow = sheet.createRow(3);
-        endforRow.createCell(0).setCellValue("{m:endfor}");
+        endforRow.createCell(0).setCellValue("{m:endfor_row}");
         
         // Variables: Only first 3 FMEA entries for testing
         List<Map<String, Object>> allFmeaEntries = MockModelData.getFmeaEntries();
