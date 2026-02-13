@@ -1,6 +1,7 @@
 package io.github.nheuermann.m2spreadsheet.tests;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,63 +59,63 @@ public class MockModelData {
         
         requirements.add(createRequirement("REQ-ESL-001", "System Power Supply",
             "The ESL shall be supplied with 12V DC from the vehicle battery with reverse polarity protection.",
-            "DAL-A"));
+            "DAL-A", Arrays.asList("BE-004", "BE-019", "BE-020", "BE-023", "BE-032", "BE-035", "BE-018", "BE-027", "BE-021", "BE-010", "BE-031", "BE-022")));
         
         requirements.add(createRequirement("REQ-ESL-002", "Locking Force",
             "The ESL shall provide a minimum locking force of 3000 N at the steering column.",
-            "DAL-A"));
+            "DAL-A", Arrays.asList("BE-001", "BE-014", "BE-015", "BE-016", "BE-017", "BE-024", "BE-009", "BE-029")));
         
         requirements.add(createRequirement("REQ-ESL-003", "Lock Engagement Time",
             "The ESL shall engage the lock within 200 ms from receiving the lock command.",
-            "DAL-B"));
+            "DAL-B", Arrays.asList("BE-001", "BE-008", "BE-011", "BE-012", "BE-013", "BE-017", "BE-023", "BE-026", "BE-030", "BE-033")));
         
         requirements.add(createRequirement("REQ-ESL-004", "CAN Communication",
             "The ESL ECU shall communicate via CAN bus at 500 kbit/s with message timeout detection.",
-            "DAL-A"));
+            "DAL-A", Arrays.asList("BE-005", "BE-021", "BE-006", "BE-022", "BE-026", "BE-030", "BE-034", "BE-004", "BE-018", "BE-025", "BE-027")));
         
         requirements.add(createRequirement("REQ-ESL-005", "Redundant Sensors",
             "The ESL shall incorporate dual Hall sensors for position detection with cross-checking.",
-            "DAL-A"));
+            "DAL-A", Arrays.asList("BE-002", "BE-003", "BE-009", "BE-018", "BE-025", "BE-027", "BE-031", "BE-032", "BE-004", "BE-010", "BE-022", "BE-023", "BE-033", "BE-006")));
         
         requirements.add(createRequirement("REQ-ESL-006", "Diagnostic Capability",
             "The ESL shall support UDS diagnostic protocol for fault memory and actuator testing.",
-            "DAL-C"));
+            "DAL-C", Arrays.asList("BE-005", "BE-006", "BE-030", "BE-034", "BE-013", "BE-026", "BE-011")));
         
         requirements.add(createRequirement("REQ-ESL-007", "Emergency Unlock",
             "The ESL shall provide mechanical emergency unlock capability accessible from vehicle exterior.",
-            "DAL-B"));
+            "DAL-B", Arrays.asList("BE-014", "BE-015", "BE-016", "BE-024", "BE-033", "BE-017", "BE-001", "BE-029", "BE-009")));
         
         requirements.add(createRequirement("REQ-ESL-008", "Temperature Range",
             "The ESL shall operate within temperature range -40°C to +85°C ambient.",
-            "DAL-B"));
+            "DAL-B", Arrays.asList("BE-019", "BE-023", "BE-029", "BE-033", "BE-020", "BE-018", "BE-027", "BE-002", "BE-003", "BE-031")));
         
         requirements.add(createRequirement("REQ-ESL-009", "Vibration Resistance",
             "The ESL shall withstand vibration per ISO 16750-3 without degradation.",
-            "DAL-C"));
+            "DAL-C", Arrays.asList("BE-009", "BE-016", "BE-017", "BE-024", "BE-025", "BE-027", "BE-010", "BE-018", "BE-032", "BE-033", "BE-015")));
         
         requirements.add(createRequirement("REQ-ESL-010", "EMC Compliance",
             "The ESL shall meet EMC requirements per ISO 11452-2 for immunity to radiated electromagnetic fields.",
-            "DAL-C"));
+            "DAL-C", Arrays.asList("BE-022", "BE-004", "BE-006", "BE-026", "BE-031", "BE-021", "BE-005", "BE-030")));
         
         requirements.add(createRequirement("REQ-ESL-011", "Fault Detection Time",
             "The ESL shall detect sensor faults within 100 ms and enter safe state.",
-            "DAL-A"));
+            "DAL-A", Arrays.asList("BE-002", "BE-003", "BE-006", "BE-008", "BE-011", "BE-013", "BE-026", "BE-030", "BE-034", "BE-031", "BE-032", "BE-023", "BE-001")));
         
         requirements.add(createRequirement("REQ-ESL-012", "Motor Current Monitoring",
             "The ESL shall monitor motor current and detect overcurrent conditions exceeding 15A.",
-            "DAL-B"));
+            "DAL-B", Arrays.asList("BE-001", "BE-008", "BE-010", "BE-017", "BE-020", "BE-023", "BE-028", "BE-032", "BE-019", "BE-027")));
         
         requirements.add(createRequirement("REQ-ESL-013", "Locked State Verification",
             "The ESL shall verify locked state through dual sensor confirmation before signaling lock complete.",
-            "DAL-A"));
+            "DAL-A", Arrays.asList("BE-002", "BE-003", "BE-009", "BE-006", "BE-011", "BE-013", "BE-026", "BE-030", "BE-034", "BE-014", "BE-015", "BE-024")));
         
         requirements.add(createRequirement("REQ-ESL-014", "Watchdog Timer",
             "The ESL ECU shall implement internal and external watchdog with maximum 100ms timeout.",
-            "DAL-A"));
+            "DAL-A", Arrays.asList("BE-011", "BE-006", "BE-013", "BE-023", "BE-026", "BE-030", "BE-012", "BE-004", "BE-020", "BE-035", "BE-008")));
         
         requirements.add(createRequirement("REQ-ESL-015", "Ignition Interlock",
             "The ESL shall prevent ignition start when lock is not in fully engaged position.",
-            "DAL-A"));
+            "DAL-A", Arrays.asList("BE-002", "BE-003", "BE-009", "BE-014", "BE-015", "BE-024", "BE-006", "BE-026", "BE-013", "BE-034")));
         
         return requirements;
     }
@@ -946,12 +947,13 @@ public class MockModelData {
     // HELPER METHODS - Object Creators
     // ============================================================================
     
-    private static Map<String, Object> createRequirement(String id, String name, String rationale, String dal) {
+    private static Map<String, Object> createRequirement(String id, String name, String rationale, String dal, List<String> traces) {
         Map<String, Object> req = new HashMap<>();
         req.put("id", id);
         req.put("name", name);
         req.put("rationale", rationale);
         req.put("dal", dal);
+        req.put("traces", traces != null ? traces : new ArrayList<>());
         return req;
     }
     
