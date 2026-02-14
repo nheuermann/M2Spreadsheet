@@ -86,6 +86,7 @@ public class FolderBasedTemplatesTest extends AbstractSpreadsheetsTestSuite {
         variables.put("faultTreeEvents", MockModelData.getFaultTreeBaseEvents());
         variables.put("referenceDocuments", MockModelData.getReferenceDocuments());
         variables.put("fmeaEntries", MockModelData.getFmeaEntries());
+        variables.put("structuredFmea", MockModelData.getStructuredFmea());
         
         // Nested data for testing nested loops
         Map<String, Object> fruit = new HashMap<>();

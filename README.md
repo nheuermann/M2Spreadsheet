@@ -173,6 +173,7 @@ mvn clean install -DskipTests
 
 ### Run all folder-based tests
 ```bash
+cd /Users/nils/Documents/GitHub/M2Spreadsheet/tests/io.github.nheuermann.m2spreadsheet.tests
 mvn test -Dtest=FolderBasedTemplatesTest
 ```
 

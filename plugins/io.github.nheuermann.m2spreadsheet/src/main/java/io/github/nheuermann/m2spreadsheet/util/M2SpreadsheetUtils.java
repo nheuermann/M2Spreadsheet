@@ -263,10 +263,28 @@ public class M2SpreadsheetUtils {
                         templateRowNum = endforRow + 1;
                         continue;
                     } else {
+                        // Write error to the cell
+                        Row destErrorRow = destSheet.createRow(destRowNum);
+                        Cell errorCell = destErrorRow.createCell(0);
+                        errorCell.setCellValue(firstCellContent + "\n[ERROR] Missing {m:endfor_row} in a following row");
                         result.getValidationMessages().add(
                             "Warning: {m:for_row} at row " + templateRowNum + " has no matching {m:endfor_row}");
+                        templateRowNum++;
+                        destRowNum++;
                     }
                 }
+            }
+            
+            // Check for orphaned endfor_row
+            if (firstCellContent != null && firstCellContent.trim().equals("{m:endfor_row}")) {
+                Row destErrorRow = destSheet.createRow(destRowNum);
+                Cell errorCell = destErrorRow.createCell(0);
+                errorCell.setCellValue("{m:endfor_row}\n[ERROR] Missing {m:for_row} in a previous row");
+                result.getValidationMessages().add(
+                    "Warning: Orphaned {m:endfor_row} at row " + templateRowNum);
+                templateRowNum++;
+                destRowNum++;
+                continue;
             }
             
             // Regular row (no for loop)
@@ -397,18 +415,65 @@ public class M2SpreadsheetUtils {
             
             index++;
             
-            // Copy body rows (between for and endfor)
-            for (int bodyRowNum = forRowNum + 1; bodyRowNum < endforRowNum; bodyRowNum++) {
+            // Process body rows (between for and endfor), checking for nested for_row loops
+            int bodyRowNum = forRowNum + 1;
+            while (bodyRowNum < endforRowNum) {
                 Row templateRow = templateSheet.getRow(bodyRowNum);
-                if (templateRow != null) {
-                    Row destRow = destSheet.createRow(destRowNum);
-                    if (index <= 3) {  // Debug first 3
-                        System.out.println("DEBUG:   Creating dest row " + destRowNum + " from template row " + bodyRowNum);
-                    }
-                    copyRow(templateRow, destRow, loopVars, queryEnvironment, sheetColumnLoops,
-                           templateWorkbook, destinationWorkbook, styleCache, fontCache);
+                if (templateRow == null) {
+                    destSheet.createRow(destRowNum);
+                    bodyRowNum++;
                     destRowNum++;
+                    continue;
                 }
+                
+                // Check if this body row contains a nested for_row loop
+                Cell firstCell = templateRow.getCell(0);
+                String firstCellContent = getCellContent(firstCell);
+                
+                if (firstCellContent != null && isForRowLoopStart(firstCellContent)) {
+                    // Nested for_row loop detected
+                    if (index <= 3) {
+                        System.out.println("DEBUG:   Nested for_row detected at body row " + bodyRowNum);
+                    }
+                    
+                    ForRowLoopInfo nestedForLoop = parseForRowLoop(firstCellContent);
+                    if (nestedForLoop != null) {
+                        // Find the endfor_row for this nested loop
+                        int nestedEndforRow = findEndForRowLoop(templateSheet, bodyRowNum + 1);
+                        
+                        if (nestedEndforRow > bodyRowNum && nestedEndforRow < endforRowNum) {
+                            // Process the nested for_row loop recursively
+                            destRowNum = processForRowLoop(
+                                templateSheet, destSheet,
+                                bodyRowNum, nestedEndforRow,
+                                destRowNum, nestedForLoop,
+                                loopVars, queryEnvironment, result, sheetColumnLoops,
+                                templateWorkbook, destinationWorkbook, styleCache, fontCache);
+                            
+                            // Skip to after the nested loop's endfor
+                            bodyRowNum = nestedEndforRow + 1;
+                            continue;
+                        } else {
+                            // Error: nested loop's endfor not found or invalid
+                            Row destRow = destSheet.createRow(destRowNum);
+                            Cell errorCell = destRow.createCell(0);
+                            errorCell.setCellValue(firstCellContent + "\n[ERROR] Missing {m:endfor_row} in a following row (nested loop)");
+                            destRowNum++;
+                            bodyRowNum++;
+                            continue;
+                        }
+                    }
+                }
+                
+                // Regular row (no nested for_row)
+                Row destRow = destSheet.createRow(destRowNum);
+                if (index <= 3) {  // Debug first 3
+                    System.out.println("DEBUG:   Creating dest row " + destRowNum + " from template row " + bodyRowNum);
+                }
+                copyRow(templateRow, destRow, loopVars, queryEnvironment, sheetColumnLoops,
+                       templateWorkbook, destinationWorkbook, styleCache, fontCache);
+                destRowNum++;
+                bodyRowNum++;
             }
         }
         
@@ -528,10 +593,25 @@ public class M2SpreadsheetUtils {
                         templateColIdx = endforColIdx + 1;
                         continue;
                     } else {
+                        // Write error to the cell
+                        Cell destCell = destRow.createCell(destColIdx);
+                        destCell.setCellValue(content + "\n[ERROR] Missing {m:endfor_column} in this row");
                         System.err.println("WARNING: for_column at column " + templateColIdx + 
                                          " has no matching endfor_column");
+                        destColIdx++;
+                        templateColIdx++;
+                        continue;
                     }
                 }
+            }
+            
+            // Check for orphaned endfor_column
+            if (content != null && content.trim().equals("{m:endfor_column}")) {
+                Cell destCell = destRow.createCell(destColIdx);
+                destCell.setCellValue("{m:endfor_column}\n[ERROR] Missing {m:for_column} in this row");
+                destColIdx++;
+                templateColIdx++;
+                continue;
             }
             
             // Regular cell copy
@@ -653,13 +733,28 @@ public class M2SpreadsheetUtils {
     /**
      * Find endfor_column marker in a row, starting from a given column.
      */
+    /**
+     * Find the column containing the matching {m:endfor_column} for a for_column loop.
+     * Handles nested for_column loops by counting depth.
+     */
     private static int findEndForColumnInRow(Row row, int startCol) {
         short lastCellNum = row.getLastCellNum();
+        int depth = 1;  // Start at depth 1 (we're inside a for_column)
+        
         for (int colIdx = startCol; colIdx < lastCellNum; colIdx++) {
             Cell cell = row.getCell(colIdx);
             String content = getCellContent(cell);
-            if (content != null && isForColumnLoopEnd(content)) {
-                return colIdx;
+            
+            // Check for nested for_column (increases depth)
+            if (content != null && isForColumnLoopStart(content)) {
+                depth++;
+            }
+            // Check for endfor_column (decreases depth)
+            else if (content != null && isForColumnLoopEnd(content)) {
+                depth--;
+                if (depth == 0) {
+                    return colIdx;
+                }
             }
         }
         return -1;
@@ -718,11 +813,49 @@ public class M2SpreadsheetUtils {
             
             index++;
             
-            // Copy body columns (between for_column and endfor_column)
-            for (int bodyColIdx = forColIdx + 1; bodyColIdx < endforColIdx; bodyColIdx++) {
+            // Process body columns (between for_column and endfor_column), checking for nested for_column loops
+            int bodyColIdx = forColIdx + 1;
+            while (bodyColIdx < endforColIdx) {
                 Cell templateCell = templateRow.getCell(bodyColIdx);
-                Cell destCell = destRow.createCell(destColIdx);
+                String cellContent = getCellContent(templateCell);
                 
+                // Check if this body column contains a nested for_column loop
+                if (cellContent != null && isForColumnLoopStart(cellContent)) {
+                    // Nested for_column loop detected
+                    if (index <= 3) {
+                        System.out.println("DEBUG:   Nested for_column detected at body column " + bodyColIdx);
+                    }
+                    
+                    ForColumnLoopInfo nestedForLoop = parseForColumnLoop(cellContent);
+                    if (nestedForLoop != null) {
+                        // Find the endfor_column for this nested loop
+                        int nestedEndforCol = findEndForColumnInRow(templateRow, bodyColIdx + 1);
+                        
+                        if (nestedEndforCol > bodyColIdx && nestedEndforCol < endforColIdx) {
+                            // Process the nested for_column loop recursively
+                            destColIdx = processColumnLoop(
+                                templateRow, destRow,
+                                bodyColIdx, nestedEndforCol,
+                                destColIdx, nestedForLoop,
+                                loopVars, queryEnvironment,
+                                templateWorkbook, destinationWorkbook, styleCache, fontCache);
+                            
+                            // Skip to after the nested loop's endfor
+                            bodyColIdx = nestedEndforCol + 1;
+                            continue;
+                        } else {
+                            // Error: nested loop's endfor not found or invalid
+                            Cell destCell = destRow.createCell(destColIdx);
+                            destCell.setCellValue(cellContent + "\n[ERROR] Missing {m:endfor_column} in this row (nested loop)");
+                            destColIdx++;
+                            bodyColIdx++;
+                            continue;
+                        }
+                    }
+                }
+                
+                // Regular column (no nested for_column)
+                Cell destCell = destRow.createCell(destColIdx);
                 copyCellContent(templateCell, destCell, loopVars, queryEnvironment,
                                templateWorkbook, destinationWorkbook, styleCache, fontCache);
                 
@@ -731,6 +864,7 @@ public class M2SpreadsheetUtils {
                 destRow.getSheet().setColumnWidth(destColIdx, templateWidth);
                 
                 destColIdx++;
+                bodyColIdx++;
             }
         }
         
@@ -1034,15 +1168,30 @@ public class M2SpreadsheetUtils {
     /**
      * Find the row containing {m:endfor_row}
      */
+    /**
+     * Find the row containing the matching {m:endfor_row} for a for_row loop.
+     * Handles nested for_row loops by counting depth.
+     */
     private static int findEndForRowLoop(Sheet sheet, int startRow) {
         int lastRow = sheet.getLastRowNum();
+        int depth = 1;  // Start at depth 1 (we're inside a for_row)
+        
         for (int rowNum = startRow; rowNum <= lastRow; rowNum++) {
             Row row = sheet.getRow(rowNum);
             if (row != null) {
                 Cell firstCell = row.getCell(0);
                 String content = getCellContent(firstCell);
-                if (isForRowLoopEnd(content)) {
-                    return rowNum;
+                
+                // Check for nested for_row (increases depth)
+                if (content != null && isForRowLoopStart(content)) {
+                    depth++;
+                }
+                // Check for endfor_row (decreases depth)
+                else if (isForRowLoopEnd(content)) {
+                    depth--;
+                    if (depth == 0) {
+                        return rowNum;
+                    }
                 }
             }
         }
@@ -1934,6 +2083,9 @@ public class M2SpreadsheetUtils {
      * Process within-cell for loops in the text.
      * This handles {m:for var | collection} ... {m:endfor} patterns within a single cell.
      * Supports nesting and sequential loops.
+     * 
+     * TODO: Add validation-only mode that checks template structure and variable references
+     *       without generating output. This would enable pre-generation validation reporting.
      */
     private static String processForLoops(String text, Map<String, Object> variables, 
             IQueryEnvironment queryEnvironment) {
@@ -1961,8 +2113,11 @@ public class M2SpreadsheetUtils {
             // Parse for loop
             ForLoopInfo forInfo = parseForLoop(text, forStartPos);
             if (forInfo == null) {
-                // Parse error, skip this malformed for loop
+                // Parse error - write error to output
+                String errorMsg = "[ERROR] Malformed {m:for} statement. Syntax: {m:for var | collection}\n" +
+                                  "        Note: For row-level loops use {m:for_row}, for column-level use {m:for_column}";
                 result.append(text.substring(forStartPos, forStartPos + "{m:for ".length()));
+                result.append("\n").append(errorMsg);
                 pos = forStartPos + "{m:for ".length();
                 continue;
             }
@@ -1970,8 +2125,10 @@ public class M2SpreadsheetUtils {
             // Find matching endfor
             int endForPos = findMatchingEndFor(text, forStartPos);
             if (endForPos == -1) {
-                // No matching endfor, skip this for loop
+                // No matching endfor - write error to output
+                String errorMsg = "[ERROR] Missing {m:endfor} in the same cell";
                 result.append(text.substring(forStartPos, forInfo.endPos));
+                result.append("\n").append(errorMsg);
                 pos = forInfo.endPos;
                 continue;
             }
@@ -1985,8 +2142,13 @@ public class M2SpreadsheetUtils {
             AqlEvaluationResult aqlResult = evaluateAqlExpression(forInfo.collectionExpr, variables, queryEnvironment);
             if (aqlResult.hasError()) {
                 String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+                // Write error to console AND output
                 System.err.println("ERROR: Failed to evaluate collection expression: " + forInfo.collectionExpr);
                 System.err.println("       " + diagnosticMsg);
+                String errorMsg = "[ERROR] Failed to evaluate for loop collection: " + forInfo.collectionExpr + "\n" + diagnosticMsg +
+                                  "\n        Note: Variables defined in for loops are only available within that loop's body." +
+                                  "\n              For row iteration use {m:for_row}, for column iteration use {m:for_column}";
+                result.append(errorMsg);
                 pos = endForPos + "{m:endfor}".length();
                 continue;
             }
@@ -2013,7 +2175,12 @@ public class M2SpreadsheetUtils {
                 
                 System.out.println("DEBUG: For loop complete, " + index + " iterations");
             } else {
+                // Write error to console AND output
                 System.err.println("ERROR: Collection expression did not evaluate to Iterable: " + collectionObj);
+                String errorMsg = "[ERROR] For loop collection is not iterable: " + forInfo.collectionExpr + "\n" +
+                                  "        Evaluated to: " + (collectionObj != null ? collectionObj.getClass().getSimpleName() : "null") + "\n" +
+                                  "        Expected a collection or list.";
+                result.append(errorMsg);
             }
             
             // Move past the endfor
@@ -2077,10 +2244,12 @@ public class M2SpreadsheetUtils {
             // Parse for loop
             ForLoopInfo forInfo = parseForLoop(text, forStartPos);
             if (forInfo == null) {
-                // Parse error, skip this malformed for loop
+                // Parse error - write error to output
                 RichTextContent errorPart = richText.substring(
                     forStartPos, forStartPos + "{m:for ".length());
-                result = result.append(errorPart);
+                String errorMsg = "\n[ERROR] Malformed {m:for} statement. Syntax: {m:for var | collection}\n" +
+                                  "        Note: For row-level loops use {m:for_row}, for column-level use {m:for_column}";
+                result = result.append(errorPart).append(new RichTextContent(errorMsg, new ArrayList<>()));
                 pos = forStartPos + "{m:for ".length();
                 continue;
             }
@@ -2088,9 +2257,10 @@ public class M2SpreadsheetUtils {
             // Find matching endfor
             int endForPos = findMatchingEndFor(text, forStartPos);
             if (endForPos == -1) {
-                // No matching endfor, skip this for loop
+                // No matching endfor - write error to output
                 RichTextContent errorPart = richText.substring(forStartPos, forInfo.endPos);
-                result = result.append(errorPart);
+                String errorMsg = "\n[ERROR] Missing {m:endfor} in the same cell";
+                result = result.append(errorPart).append(new RichTextContent(errorMsg, new ArrayList<>()));
                 pos = forInfo.endPos;
                 continue;
             }
@@ -2105,8 +2275,13 @@ public class M2SpreadsheetUtils {
                 forInfo.collectionExpr, variables, queryEnvironment);
             if (aqlResult.hasError()) {
                 String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+                // Write error to console AND output
                 System.err.println("ERROR: Failed to evaluate collection expression: " + forInfo.collectionExpr);
                 System.err.println("       " + diagnosticMsg);
+                String errorMsg = "[ERROR] Failed to evaluate for loop collection: " + forInfo.collectionExpr + "\n" + diagnosticMsg +
+                                  "\n        Note: Variables defined in for loops are only available within that loop's body." +
+                                  "\n              For row iteration use {m:for_row}, for column iteration use {m:for_column}";
+                result = result.append(new RichTextContent(errorMsg, new ArrayList<>()));
                 pos = endForPos + "{m:endfor}".length();
                 continue;
             }
@@ -2144,7 +2319,12 @@ public class M2SpreadsheetUtils {
                 
                 System.out.println("DEBUG: For loop complete, " + index + " iterations");
             } else {
+                // Write error to console AND output
                 System.err.println("ERROR: Collection expression did not evaluate to Iterable: " + collectionObj);
+                String errorMsg = "[ERROR] For loop collection is not iterable: " + forInfo.collectionExpr + "\n" +
+                                  "        Evaluated to: " + (collectionObj != null ? collectionObj.getClass().getSimpleName() : "null") + "\n" +
+                                  "        Expected a collection or list.";
+                result = result.append(new RichTextContent(errorMsg, new ArrayList<>()));
             }
             
             // Move past the endfor
@@ -2171,6 +2351,15 @@ public class M2SpreadsheetUtils {
         // Find all {m:expression} patterns (but not {m:for, {m:endfor, {m:if, {m:endif})
         int startIdx = 0;
         while ((startIdx = result.indexOf(M_FIELD_START, startIdx)) != -1) {
+            // Check for orphaned endfor (endfor without matching for)
+            if (result.startsWith("{m:endfor}", startIdx)) {
+                String errorMsg = "\n[ERROR] Missing {m:for} in the same cell";
+                result = result.substring(0, startIdx) + result.substring(startIdx, startIdx + "{m:endfor}".length()) + 
+                         errorMsg + result.substring(startIdx + "{m:endfor}".length());
+                startIdx += "{m:endfor}".length() + errorMsg.length();
+                continue;
+            }
+            
             // Skip if this is a for, endfor, if, or endif
             if (result.startsWith("{m:for ", startIdx) || 
                 result.startsWith("{m:endfor", startIdx) ||
