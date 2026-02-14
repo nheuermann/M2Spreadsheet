@@ -72,9 +72,14 @@ All loop types (`for`, `for_row`, `for_column`) automatically provide an index v
 
 |   |
 | - |
-| `{m:if condition}` ... `{m:endif}` |
+| `{m:if condition}` ... [`{m:elseif condition}`] ... [`{m:else}`] ... `{m:endif}` |
 
-* **Placement**: `if`/`endif` statements have to be in the *same cell*
+* **Placement**: `if`/`elseif`/`else`/`endif` statements have to be in the *same cell*
+* **Syntax**:
+  - `{m:if condition}` - Required: starts the conditional block
+  - `{m:elseif condition}` - Optional: can have multiple elseif branches (evaluated in order)
+  - `{m:else}` - Optional: fallback when all previous conditions are false
+  - `{m:endif}` - Required: ends the conditional block
 * **Condition**: Any AQL expression that evaluates to a boolean value
   - Boolean values: `true`, `false`
   - Comparisons: `req.dal = 'DAL-A'`, `count > 5`, `name->size() > 0`
@@ -88,10 +93,70 @@ All loop types (`for`, `for_row`, `for_column`) automatically provide an index v
     * Recommendation: Use `{m:endif condition}` for clarity (extra text after `endif` is ignored)
 
 **Examples**:
-* `Status: {m:if isActive}Active{m:endif}{m:if not isActive}Inactive{m:endif}`
-* `{m:if req.dal = 'DAL-A'}Critical{m:endif}`
-* `{m:if traces->notEmpty()}Has traces{m:endif}`
-* `{m:for_row req | requirements}{m:if req.traces->includes(event.id)}X{m:endif}{m:endfor_row}`
+
+Simple if/else:
+```
+Status: {m:if active}Active{m:else}Inactive{m:endif}
+```
+
+Grade calculation with multiple elseif:
+```
+Grade: {m:if score >= 90}A{m:elseif score >= 80}B{m:elseif score >= 70}C{m:elseif score >= 60}D{m:else}F{m:endif}
+```
+
+String matching:
+```
+Day: {m:if day == 'Mon'}Monday{m:elseif day == 'Tue'}Tuesday{m:elseif day == 'Wed'}Wednesday{m:else}Other{m:endif}
+```
+
+Nested conditionals:
+```
+{m:if hasLicense}{m:if age >= 18}Can drive{m:else}Too young{m:endif}{m:else}No license{m:endif}
+```
+
+Used with for_row loops:
+```
+{m:for_row req | requirements}{m:if req.traces->includes(event.id)}X{m:elseif req.traces->size() > 0}?{m:else}-{m:endif}{m:endfor_row}
+```
+
+### Rich text formatting
+
+M2Spreadsheet preserves **inline text formatting** (bold, italic, colors, etc.) from templates through to generated outputs.
+
+**How it works**:
+* Template formatting within `{m:...}` expressions is preserved when evaluating replacements
+* The formatting of the `m` character in `{m:expression}` determines the formatting of the replacement text
+* Multiple formatting styles within a cell are preserved through transformations
+
+**Example use cases**:
+
+Bold value in conditional:
+```
+Template cell: "{m:if condition}X{m:endif}" with only the X in bold
+Generated output: "X" will be bold (if condition is true)
+```
+
+Colored status indicators:
+```
+Template: "Status: {m:status}" with {m:status} in red
+If status evaluates to "Active", the word "Active" appears in red
+```
+
+Mixed formatting in loops:
+```
+Template: "{m:for item | items}{m:item} {m:endfor}" 
+If item names alternate bold/regular, that formatting flows through
+```
+
+**Formatting rules**:
+1. **Expression brackets** (`{m:...}`): The 'm' character's formatting is applied to replacement text
+2. **Text replacement**: Inherits the formatting from the template position
+3. **Disappearing expressions**: When an expression evaluates to empty, formatting is irrelevant
+
+**Limitations**:
+* Rich text formatting is supported for XSSF (Excel .xlsx) workbooks
+* Currently, formatting tracking through complex nested transformations uses a simplified approach
+* (Future enhancement: Full character-by-character formatting tracking through all transformations)
 
 
 # Test infrastructure
@@ -99,6 +164,12 @@ All loop types (`for`, `for_row`, `for_column`) automatically provide an index v
 ## Folder-based tests
 
 Folder-based tests automatically discover and run all test cases in `src/test/resources/cases/`.
+
+### Build the plugins after changes - in case not yet done
+```bash
+cd plugins/io.github.nheuermann.m2spreadsheet
+mvn clean install -DskipTests
+```
 
 ### Run all folder-based tests
 ```bash

@@ -7,8 +7,12 @@ import java.util.Map;
 import java.util.Set;
 
 import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.xssf.usermodel.XSSFCell;
+import org.apache.poi.xssf.usermodel.XSSFFont;
+import org.apache.poi.xssf.usermodel.XSSFRichTextString;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import org.eclipse.acceleo.query.runtime.IQueryEnvironment;
@@ -125,13 +129,16 @@ public class M2SpreadsheetUtils {
             // Create style cache for copying styles from template to destination
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache = new java.util.HashMap<>();
             
+            // Create font cache for copying rich text fonts from template to destination
+            Map<Short, XSSFFont> fontCache = new java.util.HashMap<>();
+            
             // Process each sheet in the template
             for (int i = 0; i < templateWorkbook.getNumberOfSheets(); i++) {
                 Sheet templateSheet = templateWorkbook.getSheetAt(i);
                 Sheet destSheet = destinationWorkbook.createSheet(templateSheet.getSheetName());
                 
                 processSheet(templateSheet, destSheet, variables, queryEnvironment, result, 
-                           templateWorkbook, destinationWorkbook, styleCache);
+                           templateWorkbook, destinationWorkbook, styleCache, fontCache);
             }
             
             monitor.worked(80);
@@ -193,7 +200,8 @@ public class M2SpreadsheetUtils {
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
             GenerationResult result,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         System.out.println("DEBUG: Processing sheet: " + templateSheet.getSheetName());
         System.out.println("DEBUG: Last row num: " + templateSheet.getLastRowNum());
@@ -249,7 +257,7 @@ public class M2SpreadsheetUtils {
                             templateRowNum, endforRow,
                             destRowNum, forLoop,
                             variables, queryEnvironment, result, sheetColumnLoops,
-                            templateWorkbook, destinationWorkbook, styleCache);
+                            templateWorkbook, destinationWorkbook, styleCache, fontCache);
                         
                         // Skip to after endfor
                         templateRowNum = endforRow + 1;
@@ -264,7 +272,7 @@ public class M2SpreadsheetUtils {
             // Regular row (no for loop)
             System.out.println("DEBUG: Copying regular row " + templateRowNum + " to dest row " + destRowNum);
             copyRow(templateRow, destSheet.createRow(destRowNum), variables, queryEnvironment, sheetColumnLoops,
-                   templateWorkbook, destinationWorkbook, styleCache);
+                   templateWorkbook, destinationWorkbook, styleCache, fontCache);
             destRowNum++;
             templateRowNum++;
         }
@@ -339,22 +347,26 @@ public class M2SpreadsheetUtils {
             IQueryEnvironment queryEnvironment, GenerationResult result,
             List<SheetColumnLoop> sheetColumnLoops,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         System.out.println("DEBUG: Processing for_row loop from row " + forRowNum + " to " + endforRowNum);
         System.out.println("DEBUG: Variable: " + forLoop.varName + ", Collection: " + forLoop.collectionExpr);
         
         // Evaluate the collection expression
-        Object collectionObj;
-        try {
-            collectionObj = evaluateAqlExpression(forLoop.collectionExpr, variables, queryEnvironment);
-            System.out.println("DEBUG: Collection evaluated to: " + (collectionObj != null ? collectionObj.getClass().getName() : "null"));
-        } catch (Exception e) {
-            System.out.println("DEBUG: Failed to evaluate collection: " + e.getMessage());
+        AqlEvaluationResult aqlResult = evaluateAqlExpression(forLoop.collectionExpr, variables, queryEnvironment);
+        Object collectionObj = aqlResult.getResult();
+        
+        if (aqlResult.hasError()) {
+            String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+            System.err.println("ERROR: Failed to evaluate for_row collection: " + forLoop.collectionExpr);
+            System.err.println(diagnosticMsg);
             result.getGenerationErrors().add(new Exception(
-                "Failed to evaluate for_row loop collection: " + forLoop.collectionExpr, e));
+                "For_row loop collection error: " + forLoop.collectionExpr + "\n" + diagnosticMsg));
             return destRowNum;
         }
+        
+        System.out.println("DEBUG: Collection evaluated to: " + (collectionObj != null ? collectionObj.getClass().getName() : "null"));
         
         // Convert to iterable
         java.util.Collection<?> collection;
@@ -394,7 +406,7 @@ public class M2SpreadsheetUtils {
                         System.out.println("DEBUG:   Creating dest row " + destRowNum + " from template row " + bodyRowNum);
                     }
                     copyRow(templateRow, destRow, loopVars, queryEnvironment, sheetColumnLoops,
-                           templateWorkbook, destinationWorkbook, styleCache);
+                           templateWorkbook, destinationWorkbook, styleCache, fontCache);
                     destRowNum++;
                 }
             }
@@ -412,16 +424,17 @@ public class M2SpreadsheetUtils {
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
             List<SheetColumnLoop> sheetColumnLoops,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         // Check if this row contains for_column loops OR if sheet-level column loops exist
         if (hasForColumnLoop(templateRow) || (sheetColumnLoops != null && !sheetColumnLoops.isEmpty())) {
             copyRowWithColumnLoops(templateRow, destRow, variables, queryEnvironment, sheetColumnLoops,
-                                  templateWorkbook, destinationWorkbook, styleCache);
+                                  templateWorkbook, destinationWorkbook, styleCache, fontCache);
         } else {
             // Regular row copy
             copyRowSimple(templateRow, destRow, variables, queryEnvironment,
-                         templateWorkbook, destinationWorkbook, styleCache);
+                         templateWorkbook, destinationWorkbook, styleCache, fontCache);
         }
     }
     
@@ -448,7 +461,8 @@ public class M2SpreadsheetUtils {
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
             List<SheetColumnLoop> sheetColumnLoops,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         System.out.println("DEBUG: Processing row with for_column loops");
         
@@ -456,18 +470,18 @@ public class M2SpreadsheetUtils {
         if (hasForColumnLoop(templateRow)) {
             // Use inline for_column processing (original behavior)
             copyRowWithInlineColumnLoops(templateRow, destRow, variables, queryEnvironment,
-                                        templateWorkbook, destinationWorkbook, styleCache);
+                                        templateWorkbook, destinationWorkbook, styleCache, fontCache);
             return;
         }
         
         // Otherwise, apply sheet-level column loops
         if (sheetColumnLoops != null && !sheetColumnLoops.isEmpty()) {
             copyRowWithSheetColumnLoops(templateRow, destRow, variables, queryEnvironment, sheetColumnLoops,
-                                       templateWorkbook, destinationWorkbook, styleCache);
+                                       templateWorkbook, destinationWorkbook, styleCache, fontCache);
         } else {
             // Fallback to simple copy
             copyRowSimple(templateRow, destRow, variables, queryEnvironment,
-                         templateWorkbook, destinationWorkbook, styleCache);
+                         templateWorkbook, destinationWorkbook, styleCache, fontCache);
         }
     }
     
@@ -477,7 +491,8 @@ public class M2SpreadsheetUtils {
     private static void copyRowWithInlineColumnLoops(Row templateRow, Row destRow,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         System.out.println("DEBUG: Processing row with for_column loops");
         
@@ -507,7 +522,7 @@ public class M2SpreadsheetUtils {
                         // Process the for_column loop
                         destColIdx = processColumnLoop(templateRow, destRow, templateColIdx, endforColIdx,
                                                      destColIdx, forLoop, variables, queryEnvironment,
-                                                     templateWorkbook, destinationWorkbook, styleCache);
+                                                     templateWorkbook, destinationWorkbook, styleCache, fontCache);
                         
                         // Skip to after endfor_column
                         templateColIdx = endforColIdx + 1;
@@ -522,7 +537,7 @@ public class M2SpreadsheetUtils {
             // Regular cell copy
             Cell destCell = destRow.createCell(destColIdx);
             copyCellContent(templateCell, destCell, variables, queryEnvironment,
-                           templateWorkbook, destinationWorkbook, styleCache);
+                           templateWorkbook, destinationWorkbook, styleCache, fontCache);
             destColIdx++;
             templateColIdx++;
         }
@@ -539,7 +554,8 @@ public class M2SpreadsheetUtils {
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
             List<SheetColumnLoop> sheetColumnLoops,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         int destColIdx = 0;
         int templateColIdx = 0;
@@ -555,7 +571,7 @@ public class M2SpreadsheetUtils {
                     // Process this column range with the loop
                     destColIdx = applySheetColumnLoop(templateRow, destRow, loop,
                                                       destColIdx, variables, queryEnvironment,
-                                                      templateWorkbook, destinationWorkbook, styleCache);
+                                                      templateWorkbook, destinationWorkbook, styleCache, fontCache);
                     templateColIdx = loop.endCol + 1;
                     processedByColumnLoop = true;
                     break;
@@ -567,7 +583,7 @@ public class M2SpreadsheetUtils {
                 Cell templateCell = templateRow.getCell(templateColIdx);
                 Cell destCell = destRow.createCell(destColIdx);
                 copyCellContent(templateCell, destCell, variables, queryEnvironment,
-                               templateWorkbook, destinationWorkbook, styleCache);
+                               templateWorkbook, destinationWorkbook, styleCache, fontCache);
                 destColIdx++;
                 templateColIdx++;
             }
@@ -584,14 +600,17 @@ public class M2SpreadsheetUtils {
             SheetColumnLoop loop, int destColIdx,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         // Evaluate the collection expression
-        Object collectionObj;
-        try {
-            collectionObj = evaluateAqlExpression(loop.collectionExpr, variables, queryEnvironment);
-        } catch (Exception e) {
+        AqlEvaluationResult aqlResult = evaluateAqlExpression(loop.collectionExpr, variables, queryEnvironment);
+        Object collectionObj = aqlResult.getResult();
+        
+        if (aqlResult.hasError()) {
+            String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
             System.err.println("ERROR: Failed to evaluate sheet-level for_column collection: " + loop.collectionExpr);
+            System.err.println(diagnosticMsg);
             return destColIdx;
         }
         
@@ -618,7 +637,7 @@ public class M2SpreadsheetUtils {
                 Cell templateCell = templateRow.getCell(bodyColIdx);
                 Cell destCell = destRow.createCell(destColIdx);
                 copyCellContent(templateCell, destCell, loopVars, queryEnvironment,
-                               templateWorkbook, destinationWorkbook, styleCache);
+                               templateWorkbook, destinationWorkbook, styleCache, fontCache);
                 
                 // Copy column width from template column to destination column
                 int templateWidth = templateRow.getSheet().getColumnWidth(bodyColIdx);
@@ -654,18 +673,22 @@ public class M2SpreadsheetUtils {
             ForColumnLoopInfo forLoop, Map<String, Object> variables,
             IQueryEnvironment queryEnvironment,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         // Evaluate the collection expression
-        Object collectionObj;
-        try {
-            collectionObj = evaluateAqlExpression(forLoop.collectionExpr, variables, queryEnvironment);
-            System.out.println("DEBUG: Collection evaluated to: " + 
-                             (collectionObj != null ? collectionObj.getClass().getName() : "null"));
-        } catch (Exception e) {
-            System.err.println("ERROR: Failed to evaluate for_column collection: " + e.getMessage());
+        AqlEvaluationResult aqlResult = evaluateAqlExpression(forLoop.collectionExpr, variables, queryEnvironment);
+        Object collectionObj = aqlResult.getResult();
+        
+        if (aqlResult.hasError()) {
+            String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+            System.err.println("ERROR: Failed to evaluate for_column collection: " + forLoop.collectionExpr);
+            System.err.println(diagnosticMsg);
             return destColIdx;
         }
+        
+        System.out.println("DEBUG: Collection evaluated to: " + 
+                         (collectionObj != null ? collectionObj.getClass().getName() : "null"));
         
         // Convert to collection
         java.util.Collection<?> collection;
@@ -701,7 +724,7 @@ public class M2SpreadsheetUtils {
                 Cell destCell = destRow.createCell(destColIdx);
                 
                 copyCellContent(templateCell, destCell, loopVars, queryEnvironment,
-                               templateWorkbook, destinationWorkbook, styleCache);
+                               templateWorkbook, destinationWorkbook, styleCache, fontCache);
                 
                 // Copy column width from template column to destination column
                 int templateWidth = templateRow.getSheet().getColumnWidth(bodyColIdx);
@@ -721,7 +744,8 @@ public class M2SpreadsheetUtils {
     private static void copyRowSimple(Row templateRow, Row destRow,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         // Get the last cell index to ensure we copy all columns
         short lastCellNum = templateRow.getLastCellNum();
@@ -731,7 +755,7 @@ public class M2SpreadsheetUtils {
             Cell destCell = destRow.createCell(cellIdx);
             
             copyCellContent(templateCell, destCell, variables, queryEnvironment,
-                           templateWorkbook, destinationWorkbook, styleCache);
+                           templateWorkbook, destinationWorkbook, styleCache, fontCache);
         }
         
         // Copy row height
@@ -739,30 +763,42 @@ public class M2SpreadsheetUtils {
     }
     
     /**
-     * Copy cell content with expression evaluation.
+     * Copy cell content with expression evaluation, preserving rich text formatting.
      */
     private static void copyCellContent(Cell templateCell, Cell destCell,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache) {
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
         
         if (templateCell == null) {
             return;
         }
         
-        // Get cell content
-        String cellContent = getCellContent(templateCell);
+        // Get cell content as rich text (preserves formatting)
+        RichTextContent richContent = getRichTextContent(templateCell);
         
-        if (cellContent != null && containsExpression(cellContent)) {
-            // Evaluate and replace expressions
-            String evaluated = evaluateExpressions(cellContent, variables, queryEnvironment);
-            destCell.setCellValue(evaluated);
-        } else if (cellContent != null) {
-            // Copy as-is
-            destCell.setCellValue(cellContent);
+        if (richContent != null && containsExpression(richContent.text)) {
+            // Evaluate and replace expressions, preserving formatting
+            RichTextContent evaluated = evaluateRichTextExpressions(richContent, variables, queryEnvironment);
+            
+            // Apply rich text to destination cell (if XSSF cell)
+            if (destCell instanceof XSSFCell) {
+                applyCellRichText(evaluated, (XSSFCell) destCell, templateWorkbook, destinationWorkbook, fontCache);
+            } else {
+                // Fallback for non-XSSF cells
+                destCell.setCellValue(evaluated != null ? evaluated.text : "");
+            }
+        } else if (richContent != null) {
+            // Copy as-is with formatting
+            if (destCell instanceof XSSFCell) {
+                applyCellRichText(richContent, (XSSFCell) destCell, templateWorkbook, destinationWorkbook, fontCache);
+            } else {
+                destCell.setCellValue(richContent.text);
+            }
         }
         
-        // Copy cell style
+        // Copy cell style (base formatting)
         copyCellStyle(templateCell, destCell, templateWorkbook, destinationWorkbook, styleCache);
     }
     
@@ -833,6 +869,124 @@ public class M2SpreadsheetUtils {
         }
         
         destCell.setCellStyle(destStyle);
+    }
+    
+    /**
+     * Apply rich text content to a cell, preserving formatting runs.
+     * Uses a font cache to avoid creating duplicate fonts in the destination workbook.
+     * 
+     * @param richText The rich text content to apply
+     * @param destCell The destination cell (must be XSSFCell)
+     * @param templateWorkbook The template workbook (for font lookups)
+     * @param destinationWorkbook The destination workbook
+     * @param fontCache Cache mapping template fonts to destination fonts (by font index)
+     */
+    private static void applyCellRichText(RichTextContent richText, XSSFCell destCell,
+            XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
+            Map<Short, XSSFFont> fontCache) {
+        
+        if (richText == null || richText.text == null || richText.text.isEmpty()) {
+            destCell.setCellValue("");
+            return;
+        }
+        
+        // If there are no formatting runs or only one run covering the whole text,
+        // we can use simple cell value (the cell style will handle formatting)
+        if (richText.formattingRuns == null || richText.formattingRuns.isEmpty()) {
+            destCell.setCellValue(richText.text);
+            return;
+        }
+        
+        // Check if all runs use the same font - if so, we can use simple cell value
+        if (richText.formattingRuns.size() == 1) {
+            FormattingRun singleRun = richText.formattingRuns.get(0);
+            if (singleRun.startIndex == 0 && singleRun.endIndex == richText.text.length()) {
+                destCell.setCellValue(richText.text);
+                return;
+            }
+        }
+        
+        // Need to create rich text string with formatting runs
+        XSSFRichTextString xssfRichText = new XSSFRichTextString(richText.text);
+        
+        for (FormattingRun run : richText.formattingRuns) {
+            if (run.font == null) {
+                continue; // Skip runs without font
+            }
+            
+            // Look up or create the font in destination workbook
+            XSSFFont destFont = getOrCreateFont(run.font, templateWorkbook, destinationWorkbook, fontCache);
+            
+            // Apply the font to this character range
+            // POI uses start index and length for applyFont
+            if (run.startIndex < run.endIndex && run.startIndex < richText.text.length()) {
+                int length = Math.min(run.endIndex, richText.text.length()) - run.startIndex;
+                xssfRichText.applyFont(run.startIndex, run.startIndex + length, destFont);
+            }
+        }
+        
+        destCell.setCellValue(xssfRichText);
+    }
+    
+    /**
+     * Get or create a font in the destination workbook that matches the template font.
+     * Uses the font cache to avoid creating duplicate fonts.
+     * 
+     * @param templateFont The font from the template
+     * @param templateWorkbook The template workbook
+     * @param destinationWorkbook The destination workbook
+     * @param fontCache Cache mapping template font indexes to destination fonts (NOTE: only works for cell styles, not rich text!)
+     * @return The matching font in the destination workbook
+     */
+    private static XSSFFont getOrCreateFont(XSSFFont templateFont, XSSFWorkbook templateWorkbook,
+            XSSFWorkbook destinationWorkbook, Map<Short, XSSFFont> fontCache) {
+        
+        if (templateFont == null) {
+            return null;
+        }
+        
+        // Create a signature key based on font properties, not just index
+        // (Rich text fonts can have the same index but different properties!)
+        String fontSignature = String.format("%s-%s-%s-%s-%s-%s-%s-%s",
+            templateFont.getBold(),
+            templateFont.getItalic(),
+            templateFont.getUnderline(),
+            templateFont.getStrikeout(),
+            templateFont.getColor(),
+            templateFont.getFontHeight(),
+            templateFont.getFontName(),
+            templateFont.getTypeOffset()
+        );
+        
+        // Try to find existing matching font in destination
+        XSSFFont destFont = destinationWorkbook.findFont(
+            templateFont.getBold(),
+            templateFont.getColor(),
+            templateFont.getFontHeight(),
+            templateFont.getFontName(),
+            templateFont.getItalic(),
+            templateFont.getStrikeout(),
+            templateFont.getTypeOffset(),
+            templateFont.getUnderline()
+        );
+        
+        if (destFont == null) {
+            // Font doesn't exist in destination, create it
+            destFont = destinationWorkbook.createFont();
+            destFont.setBold(templateFont.getBold());
+            destFont.setColor(templateFont.getColor());
+            destFont.setFontHeight(templateFont.getFontHeight());
+            destFont.setFontName(templateFont.getFontName());
+            destFont.setItalic(templateFont.getItalic());
+            destFont.setStrikeout(templateFont.getStrikeout());
+            destFont.setTypeOffset(templateFont.getTypeOffset());
+            destFont.setUnderline(templateFont.getUnderline());
+            destFont.setCharSet(templateFont.getCharSet());
+        }
+        
+        // Note: Not caching rich text fonts because they can have same index but different properties
+        // The findFont() method above already provides efficient lookuptrue
+        return destFont;
     }
     
     /**
@@ -1016,6 +1170,64 @@ public class M2SpreadsheetUtils {
     }
     
     /**
+     * Gets the cell content as rich text with formatting information preserved.
+     * For STRING cells in XSSF workbooks, this extracts the rich text formatting runs.
+     * For other cell types, returns plain (unformatted) text.
+     * 
+     * @param cell The cell to read
+     * @return RichTextContent with text and formatting runs, or null if cell is null
+     */
+    private static RichTextContent getRichTextContent(Cell cell) {
+        if (cell == null) {
+            return null;
+        }
+        
+        // Handle STRING cells with potential rich text formatting
+        if (cell.getCellType() == CellType.STRING && cell instanceof XSSFCell) {
+            XSSFCell xssfCell = (XSSFCell) cell;
+            XSSFRichTextString richText = xssfCell.getRichStringCellValue();
+            String text = richText.getString();
+            
+            if (text == null || text.isEmpty()) {
+                return RichTextContent.plain("");
+            }
+            
+            List<FormattingRun> runs = new ArrayList<>();
+            int numFormattingRuns = richText.numFormattingRuns();
+            
+            // If no formatting runs, the entire text has the same formatting (cell's base font)
+            if (numFormattingRuns == 0) {
+                // Use cell's font as the formatting for the entire text
+                XSSFFont cellFont = xssfCell.getCellStyle().getFont();
+                runs.add(new FormattingRun(0, text.length(), cellFont));
+            } else {
+                // Process each formatting run
+                for (int i = 0; i < numFormattingRuns; i++) {
+                    int startIdx = richText.getIndexOfFormattingRun(i);
+                    XSSFFont font = richText.getFontOfFormattingRun(i);
+                    
+                    // Determine the end index (start of next run, or end of text)
+                    int endIdx;
+                    if (i < numFormattingRuns - 1) {
+                        endIdx = richText.getIndexOfFormattingRun(i + 1);
+                    } else {
+                        endIdx = text.length();
+                    }
+                    
+                    // Add this formatting run
+                    runs.add(new FormattingRun(startIdx, endIdx, font));
+                }
+            }
+            
+            return new RichTextContent(text, runs);
+        }
+        
+        // For non-STRING cells or non-XSSF cells, convert to plain text
+        String plainText = getCellContent(cell);
+        return plainText != null ? RichTextContent.plain(plainText) : null;
+    }
+    
+    /**
      * Checks if the content contains M2Spreadsheet expressions.
      */
     private static boolean containsExpression(String content) {
@@ -1063,6 +1275,22 @@ public class M2SpreadsheetUtils {
     }
     
     /**
+     * Check if text contains within-cell elseif statement at given position.
+     */
+    private static boolean isElseIf(String text, int pos) {
+        if (text == null || pos < 0 || pos >= text.length()) return false;
+        return text.startsWith("{m:elseif ", pos);
+    }
+    
+    /**
+     * Check if text contains within-cell else statement at given position.
+     */
+    private static boolean isElse(String text, int pos) {
+        if (text == null || pos < 0 || pos >= text.length()) return false;
+        return text.startsWith("{m:else}", pos);
+    }
+    
+    /**
      * Inner class to hold parsed if statement information.
      */
     private static class IfInfo {
@@ -1076,31 +1304,155 @@ public class M2SpreadsheetUtils {
     }
     
     /**
-     * Parse if statement syntax: {m:if condition}
+     * Represents a formatting run - a segment of text with specific font formatting.
+     */
+    private static class FormattingRun {
+        final int startIndex;    // Character index where this formatting starts
+        final int endIndex;      // Character index where this formatting ends (exclusive)
+        final XSSFFont font;     // The font applied to this segment
+        
+        FormattingRun(int startIndex, int endIndex, XSSFFont font) {
+            this.startIndex = startIndex;
+            this.endIndex = endIndex;
+            this.font = font;
+        }
+        
+        /**
+         * Creates a copy with adjusted indices.
+         */
+        FormattingRun withAdjustedIndices(int startOffset, int endOffset) {
+            return new FormattingRun(startIndex + startOffset, endIndex + endOffset, font);
+        }
+        
+        /**
+         * Creates a copy with new indices but same font.
+         */
+        FormattingRun withIndices(int newStart, int newEnd) {
+            return new FormattingRun(newStart, newEnd, font);
+        }
+    }
+    
+    /**
+     * Holds rich text content with formatting information.
+     */
+    private static class RichTextContent {
+        final String text;
+        final List<FormattingRun> formattingRuns;
+        
+        RichTextContent(String text, List<FormattingRun> formattingRuns) {
+            this.text = text;
+            this.formattingRuns = formattingRuns != null ? formattingRuns : new ArrayList<>();
+        }
+        
+        /**
+         * Creates plain text content (no formatting).
+         */
+        static RichTextContent plain(String text) {
+            return new RichTextContent(text, null);
+        }
+        
+        /**
+         * Gets the font at a specific character position (uses formatting of 'm' in {m:...}).
+         */
+        XSSFFont getFontAt(int position) {
+            for (FormattingRun run : formattingRuns) {
+                if (position >= run.startIndex && position < run.endIndex) {
+                    return run.font;
+                }
+            }
+            return null; // No specific formatting
+        }
+        
+        /**
+         * Extracts a substring with its formatting.
+         */
+        RichTextContent substring(int start, int end) {
+            String subText = text.substring(start, end);
+            List<FormattingRun> subRuns = new ArrayList<>();
+            
+            for (FormattingRun run : formattingRuns) {
+                // Check if this run overlaps with the substring range
+                int runStart = Math.max(run.startIndex, start);
+                int runEnd = Math.min(run.endIndex, end);
+                
+                if (runStart < runEnd) {
+                    // Adjust to substring-relative indices
+                    subRuns.add(new FormattingRun(runStart - start, runEnd - start, run.font));
+                }
+            }
+            
+            return new RichTextContent(subText, subRuns);
+        }
+        
+        /**
+         * Returns a substring from the given start to the end of the text.
+         */
+        RichTextContent substring(int start) {
+            return substring(start, text.length());
+        }
+        
+        /**
+         * Concatenates two rich text contents.
+         */
+        RichTextContent append(RichTextContent other) {
+            StringBuilder textBuilder = new StringBuilder(this.text);
+            textBuilder.append(other.text);
+            
+            List<FormattingRun> combinedRuns = new ArrayList<>(this.formattingRuns);
+            int offset = this.text.length();
+            
+            for (FormattingRun run : other.formattingRuns) {
+                combinedRuns.add(run.withAdjustedIndices(offset, offset));
+            }
+            
+            return new RichTextContent(textBuilder.toString(), combinedRuns);
+        }
+    }
+    
+    /**
+     * Parse if or elseif statement syntax: {m:if condition} or {m:elseif condition}
      * Returns IfInfo with condition expression and position after closing brace.
      */
     private static IfInfo parseIf(String text, int startPos) {
-        if (!text.startsWith("{m:if ", startPos)) {
+        boolean isElseIf = text.startsWith("{m:elseif ", startPos);
+        boolean isIf = text.startsWith("{m:if ", startPos);
+        
+        if (!isIf && !isElseIf) {
             return null;
         }
+        
+        String prefix = isElseIf ? "{m:elseif " : "{m:if ";
         
         // Find the closing }
-        int closingBrace = text.indexOf('}', startPos + "{m:if ".length());
+        int closingBrace = text.indexOf('}', startPos + prefix.length());
         if (closingBrace == -1) {
-            System.err.println("ERROR: Malformed {m:if} - no closing brace");
+            System.err.println("ERROR: Malformed " + prefix + "- no closing brace");
             return null;
         }
         
-        // Extract condition (without "m:if " prefix and closing })
-        String condition = text.substring(startPos + "{m:if ".length(), closingBrace).trim();
+        // Extract condition (without prefix and closing })
+        String condition = text.substring(startPos + prefix.length(), closingBrace).trim();
         
         return new IfInfo(condition, closingBrace + 1);
     }
     
     /**
      * Find matching {m:endif} for {m:if} at given position, handling nesting.
+     * Also finds {m:elseif} and {m:else} at the same nesting level.
+     * Returns a FindIfEndResult with the position and type found.
      */
-    private static int findMatchingEndIf(String text, int ifStartPos) {
+    private static class FindIfEndResult {
+        enum Type { ELSEIF, ELSE, ENDIF }
+        final int position;
+        final Type type;
+        
+        FindIfEndResult(int position, Type type) {
+            this.position = position;
+            this.type = type;
+        }
+    }
+    
+    private static FindIfEndResult findNextIfControl(String text, int ifStartPos) {
         int depth = 0;
         int pos = ifStartPos + "{m:if ".length();
         
@@ -1108,9 +1460,19 @@ public class M2SpreadsheetUtils {
             if (isIfStart(text, pos)) {
                 depth++;
                 pos += "{m:if ".length();
+            } else if (isElseIf(text, pos)) {
+                if (depth == 0) {
+                    return new FindIfEndResult(pos, FindIfEndResult.Type.ELSEIF);
+                }
+                pos += "{m:elseif ".length();
+            } else if (isElse(text, pos)) {
+                if (depth == 0) {
+                    return new FindIfEndResult(pos, FindIfEndResult.Type.ELSE);
+                }
+                pos += "{m:else}".length();
             } else if (isIfEnd(text, pos)) {
                 if (depth == 0) {
-                    return pos;  // Found matching endif
+                    return new FindIfEndResult(pos, FindIfEndResult.Type.ENDIF);
                 }
                 depth--;
                 pos += "{m:endif}".length();
@@ -1120,12 +1482,22 @@ public class M2SpreadsheetUtils {
         }
         
         System.err.println("ERROR: No matching {m:endif} for {m:if} at position " + ifStartPos);
-        return -1;
+        return null;
+    }
+    
+    /**
+     * Find matching {m:endif} for {m:if} at given position, handling nesting.
+     * @deprecated Use findNextIfControl instead for better elseif/else support
+     */
+    @Deprecated
+    private static int findMatchingEndIf(String text, int ifStartPos) {
+        FindIfEndResult result = findNextIfControl(text, ifStartPos);
+        return result != null && result.type == FindIfEndResult.Type.ENDIF ? result.position : -1;
     }
     
     /**
      * Process within-cell if statements in the text.
-     * This handles {m:if condition} ... {m:endif} patterns within a single cell.
+     * This handles {m:if condition} ... [{m:elseif condition}]* [{m:else}]? {m:endif} patterns within a single cell.
      * Supports nesting and sequential if statements.
      */
     private static String processIfStatements(String text, Map<String, Object> variables,
@@ -1158,51 +1530,323 @@ public class M2SpreadsheetUtils {
                 continue;
             }
             
-            // Find matching endif
-            int endIfPos = findMatchingEndIf(text, ifStartPos);
-            if (endIfPos == -1) {
-                // No matching endif, skip this if statement
-                result.append(text.substring(ifStartPos, ifInfo.ifEndPos));
+            // Process the complete if/elseif/else/endif structure
+            int endPos = processCompleteIfStructure(text, ifStartPos, ifInfo, variables, queryEnvironment, result);
+            if (endPos == -1) {
+                // Error processing if structure, skip to end of if header
                 pos = ifInfo.ifEndPos;
-                continue;
+            } else {
+                pos = endPos;
             }
-            
-            // Extract body content (between {m:if ...} and {m:endif})
-            String bodyContent = text.substring(ifInfo.ifEndPos, endIfPos);
-            
-            // Evaluate condition expression
-            boolean conditionResult = false;
-            try {
-                Object value = evaluateAqlExpression(ifInfo.condition, variables, queryEnvironment);
-                // Convert to boolean
-                if (value instanceof Boolean) {
-                    conditionResult = (Boolean) value;
-                } else if (value instanceof Number) {
-                    conditionResult = ((Number) value).doubleValue() != 0;
-                } else if (value instanceof String) {
-                    conditionResult = !((String) value).isEmpty();
-                } else if (value instanceof java.util.Collection) {
-                    conditionResult = !((java.util.Collection<?>) value).isEmpty();
-                } else {
-                    conditionResult = (value != null);
-                }
-            } catch (Exception e) {
-                System.err.println("ERROR: Failed to evaluate if condition: " + ifInfo.condition);
-                System.err.println("       " + e.getMessage());
-                conditionResult = false;
-            }
-            
-            // Include body content only if condition is true
-            if (conditionResult) {
-                // Recursively process the body (may contain nested if statements)
-                result.append(processIfStatements(bodyContent, variables, queryEnvironment));
-            }
-            
-            // Move past {m:endif}
-            pos = endIfPos + "{m:endif}".length();
         }
         
         return result.toString();
+    }
+    
+    /**
+     * Process within-cell if statements preserving rich text formatting.
+     * This is the rich text version of processIfStatements that tracks formatting through transformations.
+     */
+    private static RichTextContent processIfStatementsRichText(RichTextContent richText, 
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment) {
+        
+        if (richText == null || richText.text == null) {
+            return richText;
+        }
+        
+        String text = richText.text;
+        List<RichTextContent> parts = new ArrayList<>();
+        int pos = 0;
+        
+        while (pos < text.length()) {
+            // Look for next if statement
+            int ifStartPos = text.indexOf("{m:if ", pos);
+            
+            if (ifStartPos == -1) {
+                // No more if statements, append remaining text with formatting
+                if (pos < text.length()) {
+                    parts.add(richText.substring(pos, text.length()));
+                }
+                break;
+            }
+            
+            // Append text before the if statement with formatting
+            if (ifStartPos > pos) {
+                parts.add(richText.substring(pos, ifStartPos));
+            }
+            
+            // Parse if statement
+            IfInfo ifInfo = parseIf(text, ifStartPos);
+            if (ifInfo == null) {
+                // Parse error, include the malformed part
+                parts.add(richText.substring(ifStartPos, Math.min(ifStartPos + "{m:if ".length(), text.length())));
+                pos = ifStartPos + "{m:if ".length();
+                continue;
+            }
+            
+            // Get the font at the 'm' position (for applying to replacement text)
+            // Position of 'm' in "{m:if " is ifStartPos + 1
+            XSSFFont expressionFont = richText.getFontAt(ifStartPos + 1);
+            
+            // Process the complete if/elseif/else/endif structure
+            RichTextContent ifResult = processCompleteIfStructureRichText(richText, ifStartPos, ifInfo, 
+                    variables, queryEnvironment, expressionFont);
+            
+            if (ifResult != null) {
+                parts.add(ifResult);
+                // Find endif to determine where to continue
+                FindIfEndResult endifResult = findNextIfControlFinal(text, ifStartPos);
+                if (endifResult != null) {
+                    pos = endifResult.position + "{m:endif}".length();
+                } else {
+                    pos = ifInfo.ifEndPos; // Error case
+                }
+            } else {
+                // Error processing, skip
+                pos = ifInfo.ifEndPos;
+            }
+        }
+        
+        // Concatenate all parts
+        if (parts.isEmpty()) {
+            return RichTextContent.plain("");
+        }
+        
+        RichTextContent result = parts.get(0);
+        for (int i = 1; i < parts.size(); i++) {
+            result = result.append(parts.get(i));
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Finds the final endif for an if structure (skipping all elseif/else).
+     */
+    private static FindIfEndResult findNextIfControlFinal(String text, int ifStartPos) {
+        FindIfEndResult result = findNextIfControl(text, ifStartPos);
+        while (result != null && result.type != FindIfEndResult.Type.ENDIF) {
+            result = findNextIfControl(text, result.position);
+        }
+        return result;
+    }
+    
+    /**
+     * Process a complete if/elseif/else/endif structure with rich text formatting.
+     * Returns the evaluated content with formatting preserved.
+     */
+    private static RichTextContent processCompleteIfStructureRichText(RichTextContent richText, 
+            int ifStartPos, IfInfo ifInfo, Map<String, Object> variables, 
+            IQueryEnvironment queryEnvironment, XSSFFont expressionFont) {
+        
+        String text = richText.text;
+        boolean conditionMatched = false;
+        int currentPos = ifInfo.ifEndPos;
+        
+        // Evaluate the main if condition
+        boolean ifCondition = evaluateCondition(ifInfo.condition, variables, queryEnvironment);
+        
+        // Find the next control structure (elseif, else, or endif)
+        FindIfEndResult controlResult = findNextIfControl(text, ifStartPos);
+        if (controlResult == null) {
+            return null;
+        }
+        
+        // Extract the "then" body with formatting
+        RichTextContent thenBody = richText.substring(ifInfo.ifEndPos, controlResult.position);
+        RichTextContent result = null;
+        
+        if (ifCondition) {
+            // If condition was true, process the then body
+            result = processIfStatementsRichText(thenBody, variables, queryEnvironment);
+            conditionMatched = true;
+        }
+        
+        // Now process any elseif/else clauses
+        currentPos = controlResult.position;
+        FindIfEndResult.Type currentType = controlResult.type;
+        
+        while (currentType != FindIfEndResult.Type.ENDIF && !conditionMatched) {
+            if (currentType == FindIfEndResult.Type.ELSEIF) {
+                // Parse the elseif condition
+                IfInfo elseIfInfo = parseIf(text, currentPos);
+                if (elseIfInfo == null) {
+                    return null;
+                }
+                
+                // Find next control structure after this elseif
+                FindIfEndResult nextControl = findNextIfControl(text, currentPos);
+                if (nextControl == null) {
+                    return null;
+                }
+                
+                // Extract elseif body with formatting
+                RichTextContent elseIfBody = richText.substring(elseIfInfo.ifEndPos, nextControl.position);
+                
+                // Evaluate condition
+                boolean elseIfCondition = evaluateCondition(elseIfInfo.condition, variables, queryEnvironment);
+                if (elseIfCondition) {
+                    result = processIfStatementsRichText(elseIfBody, variables, queryEnvironment);
+                    conditionMatched = true;
+                }
+                
+                currentPos = nextControl.position;
+                currentType = nextControl.type;
+                
+            } else if (currentType == FindIfEndResult.Type.ELSE) {
+                // Skip past {m:else}
+                int elseEndPos = currentPos + "{m:else}".length();
+                
+                // Find the endif
+                FindIfEndResult endifResult = findNextIfControl(text, currentPos);
+                if (endifResult == null || endifResult.type != FindIfEndResult.Type.ENDIF) {
+                    return null;
+                }
+                
+                // Extract else body with formatting
+                RichTextContent elseBody = richText.substring(elseEndPos, endifResult.position);
+                
+                // Process else body
+                result = processIfStatementsRichText(elseBody, variables, queryEnvironment);
+                conditionMatched = true;
+                
+                break; // Endif will follow
+            }
+        }
+        
+        // If no condition matched, return empty
+        if (result == null) {
+            result = RichTextContent.plain("");
+        }
+        
+        // Apply expression font if result is plain text (preserves 'm' character formatting rule)
+        if (expressionFont != null && result.formattingRuns.isEmpty() && !result.text.isEmpty()) {
+            List<FormattingRun> runs = new ArrayList<>();
+            runs.add(new FormattingRun(0, result.text.length(), expressionFont));
+            result = new RichTextContent(result.text, runs);
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Process a complete if/elseif/else/endif structure starting at ifStartPos.
+     * Returns the position after the endif, or -1 on error.
+     */
+    private static int processCompleteIfStructure(String text, int ifStartPos, IfInfo ifInfo,
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment, StringBuilder result) {
+        
+        boolean conditionMatched = false;
+        int currentPos = ifInfo.ifEndPos;
+        
+        // Evaluate the main if condition
+        boolean ifCondition = evaluateCondition(ifInfo.condition, variables, queryEnvironment);
+        
+        // Find the next control structure (elseif, else, or endif)
+        FindIfEndResult controlResult = findNextIfControl(text, ifStartPos);
+        if (controlResult == null) {
+            return -1;
+        }
+        
+        // Extract the "then" body (between {m:if ...} and next control)
+        String thenBody = text.substring(ifInfo.ifEndPos, controlResult.position);
+        
+        if (ifCondition) {
+            // If condition was true, process the then body
+            result.append(processIfStatements(thenBody, variables, queryEnvironment));
+            conditionMatched = true;
+        }
+        
+        // Now process any elseif/else clauses
+        currentPos = controlResult.position;
+        FindIfEndResult.Type currentType = controlResult.type;
+        
+        while (currentType != FindIfEndResult.Type.ENDIF) {
+            if (currentType == FindIfEndResult.Type.ELSEIF) {
+                // Parse the elseif condition
+                IfInfo elseIfInfo = parseIf(text, currentPos);
+                if (elseIfInfo == null) {
+                    System.err.println("ERROR: Failed to parse elseif at position " + currentPos);
+                    return -1;
+                }
+                
+                // Find next control structure after this elseif
+                FindIfEndResult nextControl = findNextIfControl(text, currentPos);
+                if (nextControl == null) {
+                    return -1;
+                }
+                
+                // Extract elseif body
+                String elseIfBody = text.substring(elseIfInfo.ifEndPos, nextControl.position);
+                
+                // Only evaluate and process if no previous condition matched
+                if (!conditionMatched) {
+                    boolean elseIfCondition = evaluateCondition(elseIfInfo.condition, variables, queryEnvironment);
+                    if (elseIfCondition) {
+                        result.append(processIfStatements(elseIfBody, variables, queryEnvironment));
+                        conditionMatched = true;
+                    }
+                }
+                
+                currentPos = nextControl.position;
+                currentType = nextControl.type;
+                
+            } else if (currentType == FindIfEndResult.Type.ELSE) {
+                // Skip past {m:else}
+                int elseEndPos = currentPos + "{m:else}".length();
+                
+                // Find the endif
+                FindIfEndResult endifResult = findNextIfControl(text, currentPos);
+                if (endifResult == null || endifResult.type != FindIfEndResult.Type.ENDIF) {
+                    System.err.println("ERROR: Expected endif after else at position " + currentPos);
+                    return -1;
+                }
+                
+                // Extract else body
+                String elseBody = text.substring(elseEndPos, endifResult.position);
+                
+                // Only process if no previous condition matched
+                if (!conditionMatched) {
+                    result.append(processIfStatements(elseBody, variables, queryEnvironment));
+                }
+                
+                currentPos = endifResult.position;
+                currentType = FindIfEndResult.Type.ENDIF;
+            }
+        }
+        
+        // Skip past the {m:endif}
+        return currentPos + "{m:endif}".length();
+    }
+    
+    /**
+     * Evaluate a condition expression and return boolean result.
+     */
+    private static boolean evaluateCondition(String condition, Map<String, Object> variables,
+            IQueryEnvironment queryEnvironment) {
+        
+        AqlEvaluationResult aqlResult = evaluateAqlExpression(condition, variables, queryEnvironment);
+        
+        if (aqlResult.hasError()) {
+            String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+            System.err.println("ERROR: Failed to evaluate if condition: " + condition);
+            System.err.println("       " + diagnosticMsg);
+            return false;
+        }
+        
+        Object value = aqlResult.getResult();
+        // Convert to boolean
+        if (value instanceof Boolean) {
+            return (Boolean) value;
+        } else if (value instanceof Number) {
+            return ((Number) value).doubleValue() != 0;
+        } else if (value instanceof String) {
+            return !((String) value).isEmpty();
+        } else if (value instanceof java.util.Collection) {
+            return !((java.util.Collection<?>) value).isEmpty();
+        } else {
+            return (value != null);
+        }
     }
     
     /**
@@ -1338,15 +1982,15 @@ public class M2SpreadsheetUtils {
             System.out.println("DEBUG: For loop body: " + bodyContent);
             
             // Evaluate collection expression
-            Object collectionObj = null;
-            try {
-                collectionObj = evaluateAqlExpression(forInfo.collectionExpr, variables, queryEnvironment);
-            } catch (Exception e) {
+            AqlEvaluationResult aqlResult = evaluateAqlExpression(forInfo.collectionExpr, variables, queryEnvironment);
+            if (aqlResult.hasError()) {
+                String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
                 System.err.println("ERROR: Failed to evaluate collection expression: " + forInfo.collectionExpr);
-                System.err.println("       " + e.getMessage());
+                System.err.println("       " + diagnosticMsg);
                 pos = endForPos + "{m:endfor}".length();
                 continue;
             }
+            Object collectionObj = aqlResult.getResult();
             
             // Check if result is iterable
             if (collectionObj instanceof Iterable) {
@@ -1386,6 +2030,137 @@ public class M2SpreadsheetUtils {
     }
     
     /**
+     * Process within-cell for loops in rich text content, preserving formatting.
+     * This handles {m:for var | collection} ... {m:endfor} patterns within a single cell.
+     * Supports nesting and sequential loops.
+     * 
+     * Formatting preservation rule: The formatting of the 'm' character in {m:for ...}
+     * is applied to each iteration's result.
+     * 
+     * @param richText The rich text content with for loops
+     * @param variables Variable context for evaluation
+     * @param queryEnvironment AQL query environment
+     * @return Rich text content with loops expanded and formatting preserved
+     */
+    private static RichTextContent processForLoopsRichText(RichTextContent richText, 
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment) {
+        
+        String text = richText.text;
+        RichTextContent result = RichTextContent.plain("");
+        int pos = 0;
+        
+        while (pos < text.length()) {
+            // Look for next for loop
+            int forStartPos = text.indexOf("{m:for ", pos);
+            
+            if (forStartPos == -1) {
+                // No more for loops, process remaining text
+                RichTextContent remaining = richText.substring(pos);
+                RichTextContent processedRemaining = processNonLoopExpressionsRichText(
+                    remaining, variables, queryEnvironment);
+                result = result.append(processedRemaining);
+                break;
+            }
+            
+            // Append text before the for loop
+            if (forStartPos > pos) {
+                RichTextContent beforeLoop = richText.substring(pos, forStartPos);
+                RichTextContent processedBefore = processNonLoopExpressionsRichText(
+                    beforeLoop, variables, queryEnvironment);
+                result = result.append(processedBefore);
+            }
+            
+            // Get formatting of the 'm' character for this for loop
+            // The 'm' is at position forStartPos + 1 (after the '{')
+            XSSFFont expressionFont = richText.getFontAt(forStartPos + 1);
+            
+            // Parse for loop
+            ForLoopInfo forInfo = parseForLoop(text, forStartPos);
+            if (forInfo == null) {
+                // Parse error, skip this malformed for loop
+                RichTextContent errorPart = richText.substring(
+                    forStartPos, forStartPos + "{m:for ".length());
+                result = result.append(errorPart);
+                pos = forStartPos + "{m:for ".length();
+                continue;
+            }
+            
+            // Find matching endfor
+            int endForPos = findMatchingEndFor(text, forStartPos);
+            if (endForPos == -1) {
+                // No matching endfor, skip this for loop
+                RichTextContent errorPart = richText.substring(forStartPos, forInfo.endPos);
+                result = result.append(errorPart);
+                pos = forInfo.endPos;
+                continue;
+            }
+            
+            // Extract body content (between {m:for ...} and {m:endfor})
+            RichTextContent bodyContent = richText.substring(forInfo.endPos, endForPos);
+            
+            System.out.println("DEBUG: For loop body (rich text): " + bodyContent.text);
+            
+            // Evaluate collection expression
+            AqlEvaluationResult aqlResult = evaluateAqlExpression(
+                forInfo.collectionExpr, variables, queryEnvironment);
+            if (aqlResult.hasError()) {
+                String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+                System.err.println("ERROR: Failed to evaluate collection expression: " + forInfo.collectionExpr);
+                System.err.println("       " + diagnosticMsg);
+                pos = endForPos + "{m:endfor}".length();
+                continue;
+            }
+            Object collectionObj = aqlResult.getResult();
+            
+            // Check if result is iterable
+            if (collectionObj instanceof Iterable) {
+                Iterable<?> collection = (Iterable<?>) collectionObj;
+                int index = 0;
+                
+                // Iterate over collection
+                for (Object item : collection) {
+                    // Create new variable context for this iteration
+                    Map<String, Object> iterationVars = new java.util.HashMap<>(variables);
+                    iterationVars.put(forInfo.varName, item);
+                    iterationVars.put(forInfo.varName + "_index", index++);
+                    
+                    System.out.println("DEBUG:   Iteration " + index + ", item=" + item);
+                    
+                    // Recursively process body (may contain nested loops or expressions)
+                    RichTextContent iterationResult = processForLoopsRichText(
+                        bodyContent, iterationVars, queryEnvironment);
+                    
+                    // If the result lost formatting (fell back to plain text), 
+                    // and we have an expressionFont, apply it
+                    if (iterationResult.formattingRuns.isEmpty() && expressionFont != null 
+                            && !iterationResult.text.isEmpty()) {
+                        FormattingRun run = new FormattingRun(0, iterationResult.text.length(), expressionFont);
+                        iterationResult = new RichTextContent(iterationResult.text, 
+                            java.util.Arrays.asList(run));
+                    }
+                    
+                    result = result.append(iterationResult);
+                }
+                
+                System.out.println("DEBUG: For loop complete, " + index + " iterations");
+            } else {
+                System.err.println("ERROR: Collection expression did not evaluate to Iterable: " + collectionObj);
+            }
+            
+            // Move past the endfor
+            // Find the } after endfor
+            int endForClosePos = text.indexOf('}', endForPos);
+            if (endForClosePos != -1) {
+                pos = endForClosePos + 1;
+            } else {
+                pos = endForPos + "{m:endfor}".length();
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
      * Process expressions that are not for loops or if statements (regular {m:expr} patterns).
      * This is separated to avoid infinite recursion.
      */
@@ -1414,58 +2189,33 @@ public class M2SpreadsheetUtils {
             String expression = result.substring(startIdx + M_FIELD_START.length(), endIdx).trim();
             
             // Evaluate using AQL
-            Object value;
+            Object value = null;
             String errorMessage = null;
+            
             if (queryEnvironment != null) {
-                try {
-                    value = evaluateAqlExpression(expression, variables, queryEnvironment);
-                    
-                    // Check if result is null and might be an error (property doesn't exist)
-                    if (value == null && expression.contains(".")) {
-                        // This looks like a property access that returned null
-                        // Validate if the property actually exists
-                        String[] parts = expression.split("\\.");
-                        if (parts.length > 0) {
-                            Object base = variables.get(parts[0]);
-                            if (base != null && base instanceof Map) {
-                                Map<?, ?> baseMap = (Map<?, ?>) base;
-                                // Check if the last property exists in the map
-                                if (parts.length > 1 && !baseMap.containsKey(parts[parts.length - 1])) {
-                                    errorMessage = "ERROR: Property '" + parts[parts.length - 1] + "' not found";
-                                }
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    // Fallback to simple evaluator on AQL error
-                    try {
-                        value = evaluateSimpleExpression(expression, variables);
-                        if (value == null) {
-                            // Simple evaluator returned null, treat as error
-                            errorMessage = "ERROR: " + e.getMessage();
-                        }
-                    } catch (Exception e2) {
-                        value = null;
-                        errorMessage = "ERROR: " + e.getMessage();
+                AqlEvaluationResult aqlResult = evaluateAqlExpression(expression, variables, queryEnvironment);
+                value = aqlResult.getResult();
+                
+                // Check for AQL diagnostics
+                if (aqlResult.getDiagnostic() != null && !aqlResult.getDiagnostic().getChildren().isEmpty()) {
+                    String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+                    if (!diagnosticMsg.isEmpty()) {
+                        errorMessage = diagnosticMsg;
                     }
                 }
             } else {
+                // Fallback to simple evaluator if no query environment
                 try {
                     value = evaluateSimpleExpression(expression, variables);
-                    if (value == null) {
-                        // Simple evaluator returned null, treat as error
-                        errorMessage = "ERROR: Expression evaluated to null";
-                    }
                 } catch (Exception e) {
-                    value = null;
-                    errorMessage = "ERROR: " + e.getMessage();
+                    errorMessage = "[ERROR] " + e.getMessage();
                 }
             }
             
             String replacement;
             if (errorMessage != null) {
-                // Keep the original expression and append error
-                replacement = result.substring(startIdx, endIdx + 1) + " [" + errorMessage + "]";
+                // Show original expression with error message
+                replacement = result.substring(startIdx, endIdx + 1) + "\n" + errorMessage;
             } else {
                 replacement = value != null ? value.toString() : "";
             }
@@ -1473,6 +2223,117 @@ public class M2SpreadsheetUtils {
             // Replace the expression with its value
             result = result.substring(0, startIdx) + replacement + result.substring(endIdx + 1);
             startIdx += replacement.length();
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Process expressions in rich text content that are not for loops or if statements 
+     * (regular {m:expr} patterns), preserving formatting.
+     * This is separated to avoid infinite recursion.
+     * 
+     * Formatting preservation rule: The formatting of the 'm' character in {m:expr}
+     * is applied to the replacement text.
+     * 
+     * @param richText The rich text content with expressions
+     * @param variables Variable context for evaluation
+     * @param queryEnvironment AQL query environment
+     * @return Rich text content with expressions evaluated and formatting preserved
+     */
+    private static RichTextContent processNonLoopExpressionsRichText(RichTextContent richText,
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment) {
+        
+        String text = richText.text;
+        RichTextContent result = RichTextContent.plain("");
+        int pos = 0;
+        
+        // Find all {m:expression} patterns (but not {m:for, {m:endfor, {m:if, {m:endif, etc.})
+        while (pos < text.length()) {
+            int startIdx = text.indexOf(M_FIELD_START, pos);
+            
+            if (startIdx == -1) {
+                // No more expressions, append remaining text
+                result = result.append(richText.substring(pos));
+                break;
+            }
+            
+            // Skip if this is a for, endfor, if, endif, elseif, or else
+            if (text.startsWith("{m:for ", startIdx) || 
+                text.startsWith("{m:endfor", startIdx) ||
+                text.startsWith("{m:if ", startIdx) ||
+                text.startsWith("{m:endif", startIdx) ||
+                text.startsWith("{m:elseif ", startIdx) ||
+                text.startsWith("{m:else}", startIdx)) {
+                // Append the control structure as-is and move past it
+                result = result.append(richText.substring(pos, startIdx + M_FIELD_START.length()));
+                pos = startIdx + M_FIELD_START.length();
+                continue;
+            }
+            
+            int endIdx = text.indexOf(FIELD_END, startIdx);
+            if (endIdx == -1) {
+                // No closing brace, append remaining text
+                result = result.append(richText.substring(pos));
+                break;
+            }
+            
+            // Append text before the expression
+            if (startIdx > pos) {
+                result = result.append(richText.substring(pos, startIdx));
+            }
+            
+            // Get formatting of the 'm' character for this expression
+            // The 'm' is at position startIdx + 1 (after the '{')
+            XSSFFont expressionFont = richText.getFontAt(startIdx + 1);
+            
+            // Extract expression (without {m: and })
+            String expression = text.substring(startIdx + M_FIELD_START.length(), endIdx).trim();
+            
+            // Evaluate using AQL
+            Object value = null;
+            String errorMessage = null;
+            
+            if (queryEnvironment != null) {
+                AqlEvaluationResult aqlResult = evaluateAqlExpression(expression, variables, queryEnvironment);
+                value = aqlResult.getResult();
+                
+                // Check for AQL diagnostics
+                if (aqlResult.getDiagnostic() != null && !aqlResult.getDiagnostic().getChildren().isEmpty()) {
+                    String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+                    if (!diagnosticMsg.isEmpty()) {
+                        errorMessage = diagnosticMsg;
+                    }
+                }
+            } else {
+                // Fallback to simple evaluator if no query environment
+                try {
+                    value = evaluateSimpleExpression(expression, variables);
+                } catch (Exception e) {
+                    errorMessage = "[ERROR] " + e.getMessage();
+                }
+            }
+            
+            String replacementText;
+            if (errorMessage != null) {
+                // Show original expression with error message
+                replacementText = text.substring(startIdx, endIdx + 1) + "\n" + errorMessage;
+            } else {
+                replacementText = value != null ? value.toString() : "";
+            }
+            
+            // Create rich text content for the replacement
+            // Apply the formatting from the 'm' character
+            RichTextContent replacement;
+            if (expressionFont != null && !replacementText.isEmpty()) {
+                FormattingRun run = new FormattingRun(0, replacementText.length(), expressionFont);
+                replacement = new RichTextContent(replacementText, java.util.Arrays.asList(run));
+            } else {
+                replacement = RichTextContent.plain(replacementText);
+            }
+            
+            result = result.append(replacement);
+            pos = endIdx + 1;
         }
         
         return result;
@@ -1497,52 +2358,68 @@ public class M2SpreadsheetUtils {
     }
     
     /**
-     * DEPRECATED: Old evaluateExpressions implementation without for loop support.
-     * Keeping for reference during migration.
+     * Evaluates AQL expressions in rich text content, preserving formatting.
+     * Uses the user-defined rule: formatting of the 'm' character in {m:...} 
+     * determines the formatting of the replacement text.
+     * 
+     * @param richText The rich text content with expressions
+     * @param variables Variable context for evaluation
+     * @param queryEnvironment AQL query environment
+     * @return Evaluated rich text with formatting preserved according to the 'm' character rule
      */
-    @SuppressWarnings("unused")
-    private static String evaluateExpressionsOld(String text, Map<String, Object> variables, 
-            IQueryEnvironment queryEnvironment) {
-        String result = text;
+    private static RichTextContent evaluateRichTextExpressions(RichTextContent richText, 
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment) {
         
-        // Find all {m:expression} patterns
-        int startIdx = 0;
-        while ((startIdx = result.indexOf(M_FIELD_START, startIdx)) != -1) {
-            int endIdx = result.indexOf(FIELD_END, startIdx);
-            if (endIdx == -1) {
-                break;
-            }
-            
-            // Extract expression (without {m: and })
-            String expression = result.substring(startIdx + M_FIELD_START.length(), endIdx).trim();
-            
-            // Evaluate using AQL (fallback to simple evaluator if AQL fails or is null)
-            Object value;
-            if (queryEnvironment != null) {
-                try {
-                    value = evaluateAqlExpression(expression, variables, queryEnvironment);
-                } catch (Exception e) {
-                    // Fallback to simple evaluator on AQL error
-                    value = evaluateSimpleExpression(expression, variables);
-                }
-            } else {
-                value = evaluateSimpleExpression(expression, variables);
-            }
-            
-            String replacement = value != null ? value.toString() : "";
-            
-            // Replace the expression with its value
-            result = result.substring(0, startIdx) + replacement + result.substring(endIdx + 1);
-            startIdx += replacement.length();
+        if (richText == null || richText.text == null) {
+            return richText;
         }
         
-        return result;
+        // Step 1: Process if statements with rich text formatting
+        RichTextContent afterIfs = processIfStatementsRichText(richText, variables, queryEnvironment);
+        
+        // Step 2: Process for loops with rich text formatting
+        RichTextContent afterLoops = processForLoopsRichText(afterIfs, variables, queryEnvironment);
+        
+        // The processForLoopsRichText already handles regular expressions via 
+        // processNonLoopExpressionsRichText, so we can just return the result
+        return afterLoops;
     }
     
     /**
      * Evaluates an AQL expression using the query environment.
      */
-    private static Object evaluateAqlExpression(String expression, Map<String, Object> variables,
+    /**
+     * Simple wrapper for AQL evaluation results including diagnostics.
+     */
+    private static class AqlEvaluationResult {
+        private final Object result;
+        private final org.eclipse.emf.common.util.Diagnostic diagnostic;
+        private final boolean hasError;
+        
+        public AqlEvaluationResult(Object result, org.eclipse.emf.common.util.Diagnostic diagnostic, boolean hasError) {
+            this.result = result;
+            this.diagnostic = diagnostic;
+            this.hasError = hasError;
+        }
+        
+        public Object getResult() {
+            return result;
+        }
+        
+        public org.eclipse.emf.common.util.Diagnostic getDiagnostic() {
+            return diagnostic;
+        }
+        
+        public boolean hasError() {
+            return hasError;
+        }
+    }
+    
+    /**
+     * Evaluates an AQL expression and returns result with diagnostics.
+     * Does not throw exceptions - errors are captured in diagnostic.
+     */
+    private static AqlEvaluationResult evaluateAqlExpression(String expression, Map<String, Object> variables,
             IQueryEnvironment queryEnvironment) {
         // Create query builder engine
         IQueryBuilderEngine queryBuilder = new QueryBuilderEngine(queryEnvironment);
@@ -1550,27 +2427,64 @@ public class M2SpreadsheetUtils {
         // Parse the expression
         AstResult astResult = queryBuilder.build(expression);
         
+        // Check for parse errors
         if (!astResult.getDiagnostic().getChildren().isEmpty()) {
-            // If there are parsing errors, throw exception to fallback to simple evaluator
-            throw new RuntimeException("AQL parse error: " + astResult.getDiagnostic());
+            return new AqlEvaluationResult(null, astResult.getDiagnostic(), true);
         }
         
         // Create evaluation engine and evaluate
         IQueryEvaluationEngine evaluationEngine = new QueryEvaluationEngine(queryEnvironment);
         EvaluationResult evalResult = evaluationEngine.eval(astResult, variables);
         
-        // Check for evaluation errors (not warnings) - look for ERROR severity
-        if (evalResult.getDiagnostic() != null && hasErrors(evalResult.getDiagnostic())) {
-            throw new RuntimeException("AQL evaluation error: " + evalResult.getDiagnostic());
+        // Check severity of diagnostics
+        boolean hasError = evalResult.getDiagnostic() != null && 
+                          hasErrors(evalResult.getDiagnostic());
+        
+        return new AqlEvaluationResult(evalResult.getResult(), evalResult.getDiagnostic(), hasError);
+    }
+    
+    /**
+     * Formats diagnostic messages into a string for display in a cell.
+     * Similar to M2Doc's diagnostic message formatting.
+     */
+    private static String formatDiagnosticMessages(org.eclipse.emf.common.util.Diagnostic diagnostic) {
+        if (diagnostic == null || diagnostic.getChildren().isEmpty()) {
+            return "";
         }
         
-        // If there are warnings but no errors, check if we got null and fallback
-        Object result = evalResult.getResult();
-        if (result == null && evalResult.getDiagnostic() != null && !evalResult.getDiagnostic().getChildren().isEmpty()) {
-            throw new RuntimeException("AQL returned null: " + evalResult.getDiagnostic());
+        StringBuilder sb = new StringBuilder();
+        for (org.eclipse.emf.common.util.Diagnostic child : diagnostic.getChildren()) {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            
+            // Add severity prefix
+            switch (child.getSeverity()) {
+                case org.eclipse.emf.common.util.Diagnostic.ERROR:
+                    sb.append("[ERROR] ");
+                    break;
+                case org.eclipse.emf.common.util.Diagnostic.WARNING:
+                    sb.append("[WARNING] ");
+                    break;
+                case org.eclipse.emf.common.util.Diagnostic.INFO:
+                    sb.append("[INFO] ");
+                    break;
+                default:
+                    break;
+            }
+            
+            sb.append(child.getMessage());
+            
+            // Recursively add child diagnostics
+            if (!child.getChildren().isEmpty()) {
+                String childMessages = formatDiagnosticMessages(child);
+                if (!childMessages.isEmpty()) {
+                    sb.append("\n").append(childMessages);
+                }
+            }
         }
         
-        return result;
+        return sb.toString();
     }
     
     /**
