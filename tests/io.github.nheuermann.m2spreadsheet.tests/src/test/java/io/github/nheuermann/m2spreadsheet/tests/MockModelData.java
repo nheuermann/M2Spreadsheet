@@ -43,6 +43,7 @@ public class MockModelData {
         variables.put("faultTreeEvents", getFaultTreeBaseEvents());
         variables.put("referenceDocuments", getReferenceDocuments());
         variables.put("fmeaEntries", getFmeaEntries());
+        variables.put("structuredFmea", getStructuredFmea());
         
         return variables;
     }
@@ -1033,5 +1034,69 @@ public class MockModelData {
         fmea.put("new_rpn", newRpn);
         
         return fmea;
+    }
+    
+    // ============================================================================
+    // STRUCTURED FMEA - Hierarchical model
+    // ============================================================================
+    
+    /**
+     * Get structured FMEA model with hierarchical component-failure-effect-cause structure.
+     * 
+     * @return FMEA model containing 10 components, each with 3 failure modes,
+     *         each failure mode with 3 effects and 2 causes
+     */
+    public static Map<String, Object> getStructuredFmea() {
+        Map<String, Object> fmeaModel = new HashMap<>();
+        fmeaModel.put("id", "FMEA-MODEL-001");
+        fmeaModel.put("name", "ESL System FMEA");
+        
+        List<Map<String, Object>> components = new ArrayList<>();
+        
+        // Create 10 components
+        for (int c = 1; c <= 10; c++) {
+            Map<String, Object> component = new HashMap<>();
+            component.put("id", "COMP-" + String.format("%03d", c));
+            component.put("name", "Component " + c);
+            
+            List<Map<String, Object>> failureModes = new ArrayList<>();
+            
+            // Each component has 3 failure modes
+            for (int f = 1; f <= 3; f++) {
+                Map<String, Object> failureMode = new HashMap<>();
+                failureMode.put("id", "FM-" + String.format("%03d", c) + "-" + String.format("%03d", f));
+                failureMode.put("name", "Failure Mode " + c + "." + f);
+                
+                List<Map<String, Object>> effects = new ArrayList<>();
+                
+                // Each failure mode has 3 effects
+                for (int e = 1; e <= 3; e++) {
+                    Map<String, Object> effect = new HashMap<>();
+                    effect.put("id", "EFF-" + String.format("%03d", c) + "-" + String.format("%03d", f) + "-" + String.format("%03d", e));
+                    effect.put("name", "Effect " + c + "." + f + "." + e);
+                    effects.add(effect);
+                }
+                
+                List<Map<String, Object>> causes = new ArrayList<>();
+                
+                // Each failure mode has 2 causes
+                for (int ca = 1; ca <= 2; ca++) {
+                    Map<String, Object> cause = new HashMap<>();
+                    cause.put("id", "CAUSE-" + String.format("%03d", c) + "-" + String.format("%03d", f) + "-" + String.format("%03d", ca));
+                    cause.put("name", "Cause " + c + "." + f + "." + ca);
+                    causes.add(cause);
+                }
+                
+                failureMode.put("effects", effects);
+                failureMode.put("causes", causes);
+                failureModes.add(failureMode);
+            }
+            
+            component.put("failureModes", failureModes);
+            components.add(component);
+        }
+        
+        fmeaModel.put("components", components);
+        return fmeaModel;
     }
 }
