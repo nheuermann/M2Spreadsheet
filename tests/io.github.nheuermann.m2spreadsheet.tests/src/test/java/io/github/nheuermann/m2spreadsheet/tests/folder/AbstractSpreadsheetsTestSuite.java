@@ -292,6 +292,34 @@ public abstract class AbstractSpreadsheetsTestSuite {
                 filesMatch = false;
             }
             
+            // Compare merged regions
+            List<org.apache.poi.ss.util.CellRangeAddress> expectedMerges = expectedSheet.getMergedRegions();
+            List<org.apache.poi.ss.util.CellRangeAddress> actualMerges = actualSheet.getMergedRegions();
+            
+            if (expectedMerges.size() != actualMerges.size()) {
+                differences.add("Sheet '" + sheetName + "' merged region count differs: expected " + 
+                              expectedMerges.size() + ", actual " + actualMerges.size());
+                filesMatch = false;
+            }
+            
+            // Find missing merges
+            for (org.apache.poi.ss.util.CellRangeAddress expectedMerge : expectedMerges) {
+                if (!actualMerges.contains(expectedMerge)) {
+                    differences.add("Sheet '" + sheetName + "' missing merge: " + 
+                                  formatMergeRegion(expectedMerge));
+                    filesMatch = false;
+                }
+            }
+            
+            // Find extra merges
+            for (org.apache.poi.ss.util.CellRangeAddress actualMerge : actualMerges) {
+                if (!expectedMerges.contains(actualMerge)) {
+                    differences.add("Sheet '" + sheetName + "' extra merge: " + 
+                                  formatMergeRegion(actualMerge));
+                    filesMatch = false;
+                }
+            }
+            
             // Compare cell contents
             int rowsToCompare = Math.max(expectedRows, actualRows);
             for (int rowIdx = 0; rowIdx < rowsToCompare; rowIdx++) {
@@ -367,6 +395,14 @@ public abstract class AbstractSpreadsheetsTestSuite {
             default:
                 return "";
         }
+    }
+    
+    /**
+     * Format a merge region for display.
+     */
+    private String formatMergeRegion(org.apache.poi.ss.util.CellRangeAddress merge) {
+        return "rows " + merge.getFirstRow() + "-" + merge.getLastRow() + 
+               ", cols " + merge.getFirstColumn() + "-" + merge.getLastColumn();
     }
     
     /**

@@ -34,6 +34,30 @@ We're working in **VS Code** with a focus on:
 3. **Mock input data** for testing (focus on rendering engine and output generation)
 4. **Excel-based verification** of outputs
 
+### Critical Development Workflow Rules
+
+⚠️ **ALWAYS COMPILE AFTER CODE CHANGES** ⚠️
+
+During testing and debugging, **always recompile** after making code changes before running tests again. Common mistake pattern:
+1. Make code change
+2. Run test → see unexpected output
+3. Make another code change
+4. Run test → still see same output (because previous change not compiled!)
+5. Get confused and make more changes...
+
+**Correct workflow:**
+```bash
+# After ANY code change to plugins:
+cd plugins/io.github.nheuermann.m2spreadsheet
+mvn clean install -DskipTests
+
+# Then run tests:
+cd ../../tests/io.github.nheuermann.m2spreadsheet.tests
+mvn test -Dtest=FolderBasedTemplatesTest
+```
+
+**Always compile first, then test!**
+
 ### Key Architectural Patterns from M2Doc
 
 #### 1. Template Structure
@@ -121,6 +145,64 @@ public void testSimpleGeneration() throws Exception {
 }
 ```
 
+#### Debug and Inspection Utilities
+
+The following utilities are available for debugging generated spreadsheets. **Use these instead of creating new ones!**
+
+##### 1. ExcelReader.java
+Location: `tests/io.github.nheuermann.m2spreadsheet.tests/src/test/java/io/github/nheuermann/m2spreadsheet/tests/ExcelReader.java`
+
+Dumps Excel file content for debugging (shows sheet structure, row counts, and first 5 rows with cell values).
+
+**Usage:**
+```bash
+cd tests/io.github.nheuermann.m2spreadsheet.tests
+mvn exec:java -Dexec.mainClass="io.github.nheuermann.m2spreadsheet.tests.ExcelReader" \
+  -Dexec.args="src/test/resources/cases/simple-features/simple-features-generated.xlsx"
+```
+
+**Output format:** Shows sheets, row numbers, and cell contents with column indices.
+
+##### 2. XlsxToCsvConverter.java
+Location: `tests/io.github.nheuermann.m2spreadsheet.tests/src/test/java/io/github/nheuermann/m2spreadsheet/tests/XlsxToCsvConverter.java`
+
+Converts XLSX files to CSV/TSV format for easy diffing and inspection.
+
+**Usage:**
+```bash
+cd tests/io.github.nheuermann.m2spreadsheet.tests
+
+# Convert to file:
+mvn exec:java -Dexec.mainClass="io.github.nheuermann.m2spreadsheet.tests.XlsxToCsvConverter" \
+  -Dexec.args="input.xlsx output.csv"
+
+# Print to stdout:
+mvn exec:java -Dexec.mainClass="io.github.nheuermann.m2spreadsheet.tests.XlsxToCsvConverter" \
+  -Dexec.args="input.xlsx"
+```
+
+**Use cases:** 
+- Compare expected vs generated using standard diff tools
+- Quick inspection of cell values without opening Excel
+
+##### 3. DiffReader.java
+Location: `tests/io.github.nheuermann.m2spreadsheet.tests/src/test/java/io/github/nheuermann/m2spreadsheet/tests/folder/DiffReader.java`
+
+Reads and displays diff files created by the test suite (shows what differences were detected).
+
+**Usage:**
+```bash
+cd tests/io.github.nheuermann.m2spreadsheet.tests
+mvn exec:java -Dexec.mainClass="io.github.nheuermann.m2spreadsheet.tests.folder.DiffReader" \
+  -Dexec.args="src/test/resources/cases/structured-fmea/structured-fmea-diff.xlsx"
+```
+
+**Output format:** Lists all cells in the diff file with their values (differences are highlighted by the test suite).
+
+**Use cases:**
+- Quickly see what differences exist between expected and generated
+- Debug test failures without opening Excel
+
 ### Code Generation Guidelines
 
 When generating code for M2Spreadsheet:
@@ -133,6 +215,31 @@ When generating code for M2Spreadsheet:
 4. **Keep AQL integration**: Reuse all the Acceleo Query Language infrastructure
 5. **Maintain service pattern**: Services for formatting, formulas, etc.
 6. **Test-driven**: Write tests before/alongside implementation
+
+### ⚠️ Critical: Row/Column Code Alignment
+
+**ALWAYS keep for_row/for_column and merge_row/merge_column implementations aligned!**
+
+These operations are directional mirrors of each other. Any logic in one MUST have its counterpart in the other:
+
+- **for_row** ↔ **for_column**: Loop directives for rows vs columns
+- **merge_row** ↔ **merge_column**: Merge directives for vertical vs horizontal merging
+
+**Key principles:**
+1. Use **identical data structures**: If `processForRowLoop` uses `Map<Integer, MergeInfo>`, then `expandRowWithLoop` must too
+2. Use **identical validation logic**: Multiple directive checks, conflict detection, error messages
+3. Use **identical debug output format**: Same message patterns, same level of detail
+4. Use **identical error handling**: No divergence in how errors are reported
+
+**Before implementing row OR column logic:**
+- Check if the counterpart exists
+- Copy and adapt the pattern exactly
+- Don't create "custom" solutions for just one direction
+
+**When reviewing code:**
+- Always compare row vs column implementations side-by-side
+- Look for any structural differences (List vs Map, different validation, etc.)
+- Align immediately - don't let divergence accumulate!
 
 ### Package Structure (Recommended)
 

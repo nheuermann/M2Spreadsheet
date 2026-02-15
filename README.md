@@ -34,6 +34,7 @@ It's inspired by (and originally forked from) M2Doc https://www.m2doc.org/.
     * There can be multiple sequential `for_row` loops in a sheet
     * Nesting with `for_column`: `for_column` loops are always treated to be *within* any `for_row` (one or many) loops
     * Recommendation: If nested loops are used, you may use `{m:endfor_row variable}` for overview purposes (additional statements after `endfor_row` are ignored by the parser)
+* **Cell Merging**: Use `{m:merge_row variablename}` in a cell to merge it vertically across all iterations of that loop variable (e.g., `{m:merge_row component}{m:component.name}` merges the component name across its failure modes)
 
 #### Repeating columns
 |   |   |   |
@@ -46,10 +47,13 @@ It's inspired by (and originally forked from) M2Doc https://www.m2doc.org/.
   - Each row automatically repeats columns according to the column loop
   - Example: If row 0 has `{m:for_column event | events}`, then row 1, row 2, etc. all expand horizontally for each event
 * **Nesting**: 
-    * Multiple `for_column` loops can be nested
+    * Multiple `for_column` loops can be nested to create hierarchical column structures
+    * Nested loops in row 0 apply to ALL subsequent rows with full variable context
+    * Example: `{m:for_column component | components}{m:for_column fm | component.failureModes}{m:for_column effect | fm.effects}` creates a 3-level hierarchy where all variables (`component`, `fm`, `effect`) are available in rows below
     * There can be multiple sequential `for_column` loops in a sheet
     * Nesting with `for_row`: `for_column` loops work within `for_row` loops - each for_row iteration gets the full column expansion
     * Recommendation: If nested loops are used, you may use `{m:endfor_column variable}` for overview purposes (additional statements after `endfor_column` are ignored by the parser)
+* **Cell Merging**: Use `{m:merge_column variablename}` in rows below row 0 to merge cells horizontally across all iterations of that loop variable (e.g., `{m:merge_column phase}{m:phase.name}` merges the phase header across its tasks)
 
 #### Index variables
 
@@ -66,6 +70,7 @@ All loop types (`for`, `for_row`, `for_column`) automatically provide an index v
 * Display row/column numbers (add 1 for 1-based numbering: `{m:item_index + 1}`)
 * Access parallel arrays by index: `{m:scores->at(item_index + 1)}`
 * Conditional formatting based on position (e.g., alternate colors)
+
 ### Conditional logic
 
 #### Conditional content within a cell
@@ -209,3 +214,18 @@ For quick testing of a single template without setting up a folder structure, us
    ```
 
 The generated file will be saved to your specified output path with detailed console output showing the generation process and any errors.
+
+
+# TODO
+I have a question (don't implement for now):
+The failure modes have each 3 effects and 2 causes. I would like to display them properly with merged cells. Ideally the failure mode spans across 6 rows, each effect spans across 2 rows, and each cause spans across 3 rows. With the construct below that's not possible. Do you have an idea how to achieve this? 
+First in terms of how to define it in the xlsx template as a user.
+Second how to implement it.
+
+  {m:for_row fm | component.failureModes}		
+    {m:for_row effect | fm.effects}		
+    {m:for_row cause | fm.causes}		
+{m:merge_row component}{m:component.name}	{m:fm.name}{m:merge_row fm}	{m:effect.name}{m:merge_row effect}
+    {m:endfor_row}		
+    {m:endfor_row}		
+  {m:endfor_row}		

@@ -300,24 +300,28 @@ public class M2SpreadsheetUtils {
     
     /**
      * Inner class to hold sheet-level column loop information.
+     * Supports nested loops via childLoops list.
      */
     private static class SheetColumnLoop {
         int startCol;
         int endCol;
         String varName;
         String collectionExpr;
+        java.util.List<SheetColumnLoop> childLoops;  // Nested loops within this loop's body
         
         SheetColumnLoop(int startCol, int endCol, String varName, String collectionExpr) {
             this.startCol = startCol;
             this.endCol = endCol;
             this.varName = varName;
             this.collectionExpr = collectionExpr;
+            this.childLoops = new java.util.ArrayList<>();
         }
     }
     
     /**
      * Detect sheet-level for_column loops (typically in first row).
      * These column loops apply to ALL rows in the sheet.
+     * Recursively detects nested loops.
      */
     private static List<SheetColumnLoop> detectSheetColumnLoops(Sheet templateSheet) {
         List<SheetColumnLoop> loops = new ArrayList<>();
@@ -343,10 +347,16 @@ public class M2SpreadsheetUtils {
                     int endforColIdx = findEndForColumnInRow(firstRow, colIdx + 1);
                     
                     if (endforColIdx > colIdx) {
-                        loops.add(new SheetColumnLoop(colIdx, endforColIdx, 
-                                                     forLoop.varName, forLoop.collectionExpr));
+                        SheetColumnLoop loop = new SheetColumnLoop(colIdx, endforColIdx, 
+                                                     forLoop.varName, forLoop.collectionExpr);
+                        
+                        // Recursively detect nested loops in the body columns
+                        loop.childLoops = detectNestedColumnLoops(firstRow, colIdx + 1, endforColIdx);
+                        
+                        loops.add(loop);
                         System.out.println("DEBUG: Sheet-level for_column: " + forLoop.varName + 
-                                         " from col " + colIdx + " to " + endforColIdx);
+                                         " from col " + colIdx + " to " + endforColIdx +
+                                         " with " + loop.childLoops.size() + " nested loop(s)");
                         colIdx = endforColIdx + 1;
                         continue;
                     }
@@ -356,7 +366,47 @@ public class M2SpreadsheetUtils {
         }
         
         return loops;
-    }    /**
+    }
+    
+    /**
+     * Detect nested column loops within a column range.
+     */
+    private static List<SheetColumnLoop> detectNestedColumnLoops(Row row, int startCol, int endCol) {
+        List<SheetColumnLoop> nestedLoops = new ArrayList<>();
+        
+        int colIdx = startCol;
+        while (colIdx < endCol) {
+            Cell cell = row.getCell(colIdx);
+            String content = getCellContent(cell);
+            
+            if (content != null && isForColumnLoopStart(content)) {
+                ForColumnLoopInfo forLoop = parseForColumnLoop(content);
+                if (forLoop != null) {
+                    int endforColIdx = findEndForColumnInRow(row, colIdx + 1);
+                    
+                    if (endforColIdx > colIdx && endforColIdx < endCol) {
+                        SheetColumnLoop nestedLoop = new SheetColumnLoop(colIdx, endforColIdx,
+                                                         forLoop.varName, forLoop.collectionExpr);
+                        
+                        // Recursively detect nested loops within this loop
+                        nestedLoop.childLoops = detectNestedColumnLoops(row, colIdx + 1, endforColIdx);
+                        
+                        nestedLoops.add(nestedLoop);
+                        System.out.println("DEBUG:   Nested loop detected: " + forLoop.varName + 
+                                         " from col " + colIdx + " to " + endforColIdx +
+                                         " with " + nestedLoop.childLoops.size() + " child loop(s)");
+                        colIdx = endforColIdx + 1;
+                        continue;
+                    }
+                }
+            }
+            colIdx++;
+        }
+        
+        return nestedLoops;
+    }
+
+    /**
      * Process a for_row loop, repeating the body rows for each item in the collection.
      */
     private static int processForRowLoop(Sheet templateSheet, Sheet destSheet,
@@ -401,6 +451,65 @@ public class M2SpreadsheetUtils {
         System.out.println("DEBUG: Collection size: " + collection.size());
         System.out.println("DEBUG: Body rows: " + (forRowNum + 1) + " to " + (endforRowNum - 1));
         
+        // Scan template body for merge_row directives
+        Map<Integer, MergeInfo> mergeColumns = new java.util.HashMap<>();
+        for (int scanRowNum = forRowNum + 1; scanRowNum < endforRowNum; scanRowNum++) {
+            Row scanRow = templateSheet.getRow(scanRowNum);
+            if (scanRow == null) continue;
+            
+            // Check if this is a nested for_row start or endfor_row - skip the directive row itself
+            Cell firstCell = scanRow.getCell(0);
+            String firstCellContent = getCellContent(firstCell);
+            if (firstCellContent != null && 
+                (isForRowLoopStart(firstCellContent) || isForRowLoopEnd(firstCellContent))) {
+                // Skip the loop control row, but continue scanning the body
+                continue;
+            }
+            
+            // Scan cells for merge directives (even inside nested loop bodies)
+            for (int colIdx = 0; colIdx <= scanRow.getLastCellNum(); colIdx++) {
+                Cell cell = scanRow.getCell(colIdx);
+                String cellContent = getCellContent(cell);
+                if (cellContent == null) continue;
+                
+                String mergeRowVar = parseMergeRowDirective(cellContent);
+                if (mergeRowVar != null) {
+                    // Check for multiple merge_row in same cell - not allowed
+                    int mergeRowCount = 0;
+                    int idx = 0;
+                    while ((idx = cellContent.indexOf("{m:merge_row ", idx)) != -1) {
+                        mergeRowCount++;
+                        idx += 13; // length of "{m:merge_row "
+                    }
+                    if (mergeRowCount > 1) {
+                        result.getGenerationErrors().add(new Exception(
+                            "ERROR at row " + scanRowNum + ", column " + colIdx + 
+                            ": Multiple {m:merge_row} directives in same cell not allowed"));
+                        continue;
+                    }
+                    
+                    // Record merge directive for this column
+                    if (mergeColumns.containsKey(colIdx)) {
+                        MergeInfo existing = mergeColumns.get(colIdx);
+                        if (!existing.varName.equals(mergeRowVar)) {
+                            result.getGenerationErrors().add(new Exception(
+                                "ERROR: Column " + colIdx + " has conflicting merge_row directives: " + 
+                                existing.varName + " vs " + mergeRowVar));
+                        }
+                    } else {
+                        mergeColumns.put(colIdx, new MergeInfo(mergeRowVar, colIdx, "row"));
+                        System.out.println("DEBUG: Found merge_row directive: column " + colIdx + ", var=" + mergeRowVar);
+                    }
+                }
+            }
+        }
+        
+        // Track merge regions to apply after loop
+        java.util.List<MergeRegion> mergeRegions = new java.util.ArrayList<>();
+        
+        // Track first row of each iteration (for merge_row)
+        int iterationStartRow = destRowNum;
+        
         // Iterate over collection
         int index = 0;
         for (Object item : collection) {
@@ -412,6 +521,9 @@ public class M2SpreadsheetUtils {
             if (index < 3) {  // Debug first 3 iterations
                 System.out.println("DEBUG: Iteration " + index + ", item: " + item);
             }
+            
+            // Track where this iteration starts
+            int thisIterationStartRow = destRowNum;
             
             index++;
             
@@ -475,6 +587,80 @@ public class M2SpreadsheetUtils {
                 destRowNum++;
                 bodyRowNum++;
             }
+            
+            // After processing all body rows for this iteration, check if we need to record merge regions
+            int thisIterationEndRow = destRowNum - 1;  // Last row of this iteration
+            
+            // For each column with merge_row directive matching current loop variable
+            for (Map.Entry<Integer, MergeInfo> entry : mergeColumns.entrySet()) {
+                int colIdx = entry.getKey();
+                MergeInfo mergeInfo = entry.getValue();
+                
+                // Only process if this merge is for the current loop variable
+                if (mergeInfo.varName.equals(forLoop.varName)) {
+                    // If this iteration spans multiple rows, create merge region
+                    if (thisIterationEndRow > thisIterationStartRow) {
+                        // Capture content from first row of this iteration
+                        Row firstRow = destSheet.getRow(thisIterationStartRow);
+                        Cell firstCell = firstRow != null ? firstRow.getCell(colIdx) : null;
+                        String content = getCellContent(firstCell);
+                        
+                        mergeRegions.add(new MergeRegion(
+                            thisIterationStartRow, thisIterationEndRow,
+                            colIdx, colIdx,
+                            content
+                        ));
+                        
+                        if (index <= 3) {
+                            System.out.println("DEBUG: Merge region recorded: column " + colIdx + 
+                                             ", rows " + thisIterationStartRow + "-" + thisIterationEndRow);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Apply merge regions after all iterations complete
+        if (!mergeRegions.isEmpty()) {
+            System.out.println("DEBUG: Applying " + mergeRegions.size() + " merge regions");
+            for (MergeRegion merge : mergeRegions) {
+                try {
+                    // Add merged region to sheet
+                    destSheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(
+                        merge.firstRow, merge.lastRow, merge.firstCol, merge.lastCol));
+                    
+                    // Write content in first cell and clear others
+                    Row firstRow = destSheet.getRow(merge.firstRow);
+                    if (firstRow != null) {
+                        Cell firstCell = firstRow.getCell(merge.firstCol);
+                        if (firstCell == null) {
+                            firstCell = firstRow.createCell(merge.firstCol);
+                        }
+                        // Content should already be there from copyRow, but ensure merge directive is removed
+                        String cleanContent = removeMergeDirectives(merge.content);
+                        if (cleanContent != null && !cleanContent.trim().isEmpty()) {
+                            firstCell.setCellValue(cleanContent);
+                        }
+                        
+                        // Clear content from other cells in the merged region
+                        for (int row = merge.firstRow + 1; row <= merge.lastRow; row++) {
+                            Row r = destSheet.getRow(row);
+                            if (r != null) {
+                                Cell c = r.getCell(merge.firstCol);
+                                if (c != null) {
+                                    c.setBlank();
+                                }
+                            }
+                        }
+                    }
+                    
+                    System.out.println("DEBUG: Applied merge: rows " + merge.firstRow + "-" + merge.lastRow + 
+                                     ", column " + merge.firstCol);
+                } catch (Exception e) {
+                    System.err.println("ERROR: Failed to apply merge region: " + e.getMessage());
+                    result.getGenerationErrors().add(e);
+                }
+            }
         }
         
         System.out.println("DEBUG: For_row loop complete, final dest row: " + destRowNum);
@@ -529,9 +715,7 @@ public class M2SpreadsheetUtils {
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
         
-        System.out.println("DEBUG: Processing row with for_column loops");
-        
-        // If this row has inline for_column markers, use them
+        // If this row has inline for_column markers, use them (they may have merge_column directives)
         if (hasForColumnLoop(templateRow)) {
             // Use inline for_column processing (original behavior)
             copyRowWithInlineColumnLoops(templateRow, destRow, variables, queryEnvironment,
@@ -637,40 +821,319 @@ public class M2SpreadsheetUtils {
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
         
+        System.out.println("DEBUG: copyRowWithSheetColumnLoops for row " + templateRow.getRowNum() + 
+                          ", " + sheetColumnLoops.size() + " sheet loops");
+        
         int destColIdx = 0;
         int templateColIdx = 0;
         short lastCellNum = templateRow.getLastCellNum();
         
-        // Process each column, expanding based on sheet-level loops
-        while (templateColIdx < lastCellNum) {
-            boolean processedByColumnLoop = false;
-            
-            // Check if this column is within any sheet-level column loop range
-            for (SheetColumnLoop loop : sheetColumnLoops) {
-                if (templateColIdx >= loop.startCol && templateColIdx <= loop.endCol) {
-                    // Process this column range with the loop
-                    destColIdx = applySheetColumnLoop(templateRow, destRow, loop,
-                                                      destColIdx, variables, queryEnvironment,
-                                                      templateWorkbook, destinationWorkbook, styleCache, fontCache);
-                    templateColIdx = loop.endCol + 1;
-                    processedByColumnLoop = true;
-                    break;
-                }
-            }
-            
-            if (!processedByColumnLoop) {
-                // Regular cell copy
+        // Process cells in order: before loops, expand loops, after loops
+        for (SheetColumnLoop loop : sheetColumnLoops) {
+            // Copy cells BEFORE this loop
+            while (templateColIdx < loop.startCol) {
                 Cell templateCell = templateRow.getCell(templateColIdx);
                 Cell destCell = destRow.createCell(destColIdx);
                 copyCellContent(templateCell, destCell, variables, queryEnvironment,
                                templateWorkbook, destinationWorkbook, styleCache, fontCache);
+                
+                // Copy column width
+                int templateWidth = templateRow.getSheet().getColumnWidth(templateColIdx);
+                destRow.getSheet().setColumnWidth(destColIdx, templateWidth);
+                
                 destColIdx++;
                 templateColIdx++;
             }
+            
+            // Expand this loop
+            destColIdx = expandRowWithLoop(templateRow, destRow, loop, destColIdx,
+                                          variables, queryEnvironment,
+                                          templateWorkbook, destinationWorkbook, styleCache, fontCache);
+            
+            // Skip past the loop in template
+            templateColIdx = loop.endCol + 1;
+        }
+        
+        // Copy cells AFTER all loops
+        while (templateColIdx < lastCellNum) {
+            Cell templateCell = templateRow.getCell(templateColIdx);
+            Cell destCell = destRow.createCell(destColIdx);
+            copyCellContent(templateCell, destCell, variables, queryEnvironment,
+                           templateWorkbook, destinationWorkbook, styleCache, fontCache);
+            
+            // Copy column width
+            int templateWidth = templateRow.getSheet().getColumnWidth(templateColIdx);
+            destRow.getSheet().setColumnWidth(destColIdx, templateWidth);
+            
+            destColIdx++;
+            templateColIdx++;
         }
         
         // Copy row height
         destRow.setHeight(templateRow.getHeight());
+    }
+    
+    /**
+     * Expand a template row for all iterations of a loop and its nested loops.
+     * This creates output columns for each combination of loop iterations, 
+     * applying template cells with the appropriate variable context.
+     * 
+     * This works analogously to processForRowLoop: iterate over body columns,
+     * and for each column, either process a nested loop (using childLoops)
+     * or copy a regular cell.
+     */
+    private static int expandRowWithLoop(Row templateRow, Row destRow,
+            SheetColumnLoop loop, int destColIdx,
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
+        
+        System.out.println("DEBUG: expandRowWithLoop for var=" + loop.varName + 
+                          ", cols " + loop.startCol + "-" + loop.endCol + 
+                          ", " + loop.childLoops.size() + " children, row=" + templateRow.getRowNum());
+        
+        // Evaluate the collection expression
+        AqlEvaluationResult aqlResult = evaluateAqlExpression(loop.collectionExpr, variables, queryEnvironment);
+        Object collectionObj = aqlResult.getResult();
+        
+        if (aqlResult.hasError()) {
+            String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+            System.err.println("ERROR: Failed to evaluate sheet-level for_column collection: " + loop.collectionExpr);
+            System.err.println(diagnosticMsg);
+            return destColIdx;
+        }
+        
+        // Convert to collection
+        java.util.Collection<?> collection;
+        if (collectionObj instanceof java.util.Collection) {
+            collection = (java.util.Collection<?>) collectionObj;
+        } else if (collectionObj != null) {
+            collection = java.util.Collections.singletonList(collectionObj);
+        } else {
+            return destColIdx;
+        }
+        
+        System.out.println("DEBUG: Collection size: " + collection.size() + ", starting destColIdx=" + destColIdx);
+        
+        // Scan template body for merge_column directives
+        // Scan the CURRENT row being processed, not row 0, since nested loops have directives in their own rows
+        int rowNum = templateRow.getRowNum();
+        Map<Integer, MergeInfo> mergeCells = new java.util.HashMap<>();
+        
+        if (templateRow != null) {
+            for (int scanColIdx = loop.startCol + 1; scanColIdx < loop.endCol; scanColIdx++) {
+                Cell scanCell = templateRow.getCell(scanColIdx);
+                String cellContent = getCellContent(scanCell);
+                if (cellContent == null) continue;
+                
+                // Skip nested for_column markers
+                if (isForColumnLoopStart(cellContent) || isForColumnLoopEnd(cellContent)) {
+                    continue;
+                }
+                
+                String mergeColVar = parseMergeColumnDirective(cellContent);
+                if (mergeColVar != null) {
+                    // Check for multiple merge_column in same cell - not allowed
+                    int mergeColCount = 0;
+                    int idx = 0;
+                    while ((idx = cellContent.indexOf("{m:merge_column ", idx)) != -1) {
+                        mergeColCount++;
+                        idx += 16; // length of "{m:merge_column "
+                    }
+                    if (mergeColCount > 1) {
+                        System.err.println("ERROR at row " + rowNum + ", column " + scanColIdx + 
+                            ": Multiple {m:merge_column} directives in same cell not allowed");
+                        continue;
+                    }
+                    
+                    // Record merge directive for this column
+                    if (mergeCells.containsKey(scanColIdx)) {
+                        MergeInfo existing = mergeCells.get(scanColIdx);
+                        if (!existing.varName.equals(mergeColVar)) {
+                            System.err.println("ERROR: Column " + scanColIdx + " has conflicting merge_column directives: " + 
+                                existing.varName + " vs " + mergeColVar);
+                        }
+                    } else {
+                        mergeCells.put(scanColIdx, new MergeInfo(mergeColVar, scanColIdx, "column"));
+                        System.out.println("DEBUG: Found merge_column directive: column " + scanColIdx + ", var=" + mergeColVar);
+                    }
+                }
+            }
+        }
+        
+        // Track merge regions to apply after loop
+        java.util.List<MergeRegion> mergeRegions = new java.util.ArrayList<>();
+        
+        // Iterate over collection
+        int index = 0;
+        for (Object item : collection) {
+            // Create variable context with loop variable
+            Map<String, Object> loopVars = new java.util.HashMap<>(variables);
+            loopVars.put(loop.varName, item);
+            loopVars.put(loop.varName + "_index", index);
+            
+            if (index < 2) {
+                System.out.println("DEBUG: Iteration " + index + " of " + loop.varName);
+            }
+            
+            // Track where this iteration starts
+            int thisIterationStartCol = destColIdx;
+            
+            index++;
+            
+            // Process body columns (like processForRowLoop processes body rows)
+            // For sheet-level column loops, the startCol contains the loop marker in row 0,
+            // and endCol contains the end marker. The body is startCol+1 to endCol-1.
+            // This is analogous to for_row where markers are in separate rows from body.
+            int templateColIdx = loop.startCol + 1;
+            
+            while (templateColIdx < loop.endCol) {
+                // Check if templateColIdx is the start of a child loop
+                SheetColumnLoop childLoop = null;
+                for (SheetColumnLoop child : loop.childLoops) {
+                    if (child.startCol == templateColIdx) {
+                        childLoop = child;
+                        break;
+                    }
+                }
+                
+                if (childLoop != null) {
+                    // This column starts a nested loop - process it recursively
+                    if (index <= 2) {
+                        System.out.println("DEBUG:   Processing child loop at col " + templateColIdx + 
+                                         " (var=" + childLoop.varName + ")");
+                    }
+                    destColIdx = expandRowWithLoop(templateRow, destRow, childLoop, destColIdx,
+                                                  loopVars, queryEnvironment,
+                                                  templateWorkbook, destinationWorkbook, styleCache, fontCache);
+                    // Skip past the nested loop
+                    templateColIdx = childLoop.endCol + 1;
+                    continue;
+                }
+                
+                // Regular cell - copy it (but skip loop markers from row 0)
+                Cell templateCell = templateRow.getCell(templateColIdx);
+                String content = getCellContent(templateCell);
+                
+                // Skip loop control markers (they only appear in row 0, but we process all rows)
+                if (content != null && (isForColumnLoopStart(content) || content.trim().equals("{m:endfor_column}"))) {
+                    templateColIdx++;
+                    continue;
+                }
+                
+                // Copy the cell
+                if (templateRow.getRowNum() <= 2 && index <= 2) {
+                    System.out.println("DEBUG:     Copying cell from templateCol " + templateColIdx +  
+                                      " to destCol " + destColIdx + " (row " + templateRow.getRowNum() + ")");
+                }
+                Cell destCell = destRow.createCell(destColIdx);
+                copyCellContent(templateCell, destCell, loopVars, queryEnvironment,
+                               templateWorkbook, destinationWorkbook, styleCache, fontCache);
+                
+                // Copy column width
+                int templateWidth = templateRow.getSheet().getColumnWidth(templateColIdx);
+                destRow.getSheet().setColumnWidth(destColIdx, templateWidth);
+                
+                destColIdx++;
+                templateColIdx++;
+            }
+            
+            // After processing all body columns for this iteration, check if we need to record merge regions
+            int thisIterationEndCol = destColIdx - 1;  // Last column of this iteration
+            
+            // For each column with merge_column directive matching current loop variable
+            for (Map.Entry<Integer, MergeInfo> entry : mergeCells.entrySet()) {
+                int colIdx = entry.getKey();
+                MergeInfo mergeInfo = entry.getValue();
+                
+                if (mergeInfo.varName.equals(loop.varName)) {
+                    // If this iteration spans multiple columns, create merge region
+                    if (thisIterationEndCol > thisIterationStartCol) {
+                        // Merge spans entire iteration width, starting at first column
+                        // (mirrors merge_row which spans entire iteration height in one column)
+                        
+                        // Capture content from first cell of iteration
+                        Cell firstCell = destRow.getCell(thisIterationStartCol);
+                        String content = getCellContent(firstCell);
+                        
+                        // Create merge region spanning entire iteration
+                        mergeRegions.add(new MergeRegion(
+                            rowNum, rowNum,  // Single row
+                            thisIterationStartCol, thisIterationEndCol,  // Entire iteration span
+                            content
+                        ));
+                        
+                        if (index <= 3) {
+                            System.out.println("DEBUG: Merge region recorded: row " + rowNum + 
+                                             ", columns " + thisIterationStartCol + "-" + thisIterationEndCol);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Apply merge regions after all iterations complete
+        if (!mergeRegions.isEmpty()) {
+            System.out.println("DEBUG: Applying " + mergeRegions.size() + " merge regions");
+            Sheet sheet = destRow.getSheet();
+            for (MergeRegion merge : mergeRegions) {
+                try {
+                    // Add merged region to sheet
+                    sheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(
+                        merge.firstRow, merge.lastRow, merge.firstCol, merge.lastCol));
+                    
+                    // Write content in first cell and clear others
+                    Row row = sheet.getRow(merge.firstRow);
+                    if (row != null) {
+                        Cell firstCell = row.getCell(merge.firstCol);
+                        if (firstCell == null) {
+                            firstCell = row.createCell(merge.firstCol);
+                        }
+                        // Content should already be there from copyCellContent, but ensure merge directive is removed
+                        String cleanContent = removeMergeDirectives(merge.content);
+                        if (cleanContent != null && !cleanContent.trim().isEmpty()) {
+                            firstCell.setCellValue(cleanContent);
+                        }
+                        
+                        // Clear content from other cells in the merged region
+                        for (int col = merge.firstCol + 1; col <= merge.lastCol; col++) {
+                            Cell c = row.getCell(col);
+                            if (c != null) {
+                                c.setBlank();
+                            }
+                        }
+                    }
+                    
+                    System.out.println("DEBUG: Applied merge: row " + merge.firstRow + 
+                                     ", columns " + merge.firstCol + "-" + merge.lastCol);
+                } catch (Exception e) {
+                    System.err.println("ERROR: Failed to apply merge region: " + e.getMessage());
+                }
+            }
+        }
+        
+        return destColIdx;
+    }
+    
+    /**
+     * OLD IMPLEMENTATION - Remove or replace
+     */
+    private static void copyRowWithSheetColumnLoops_OLD(Row templateRow, Row destRow,
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            List<SheetColumnLoop> sheetColumnLoops,
+            XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache) {
+        
+        System.out.println("DEBUG: copyRowWithSheetColumnLoops for row " + templateRow.getRowNum() + 
+                          ", " + sheetColumnLoops.size() + " sheet loops");
+        
+        int destColIdx = 0;
+        int templateColIdx = 0;
+        short lastCellNum = templateRow.getLastCellNum();
+        
+        System.out.println("DEBUG:   lastCellNum=" + lastCellNum);
     }
     
     /**
@@ -712,18 +1175,43 @@ public class M2SpreadsheetUtils {
             loopVars.put(loop.varName, item);
             loopVars.put(loop.varName + "_index", index++);
             
-            // Copy body columns (between start and end markers)
-            for (int bodyColIdx = loop.startCol + 1; bodyColIdx < loop.endCol; bodyColIdx++) {
-                Cell templateCell = templateRow.getCell(bodyColIdx);
-                Cell destCell = destRow.createCell(destColIdx);
-                copyCellContent(templateCell, destCell, loopVars, queryEnvironment,
-                               templateWorkbook, destinationWorkbook, styleCache, fontCache);
-                
-                // Copy column width from template column to destination column
-                int templateWidth = templateRow.getSheet().getColumnWidth(bodyColIdx);
-                destRow.getSheet().setColumnWidth(destColIdx, templateWidth);
-                
-                destColIdx++;
+            // Process body columns (between start and end markers)
+            // Check if we have pre-detected child loops to apply
+            if (!loop.childLoops.isEmpty()) {
+                // Apply child loops recursively
+                for (SheetColumnLoop childLoop : loop.childLoops) {
+                    destColIdx = applySheetColumnLoop(
+                        templateRow, destRow, childLoop, destColIdx,
+                        loopVars, queryEnvironment,
+                        templateWorkbook, destinationWorkbook, styleCache, fontCache
+                    );
+                }
+            } else {
+                // No child loops - process body columns directly
+                int bodyColIdx = loop.startCol + 1;
+                while (bodyColIdx < loop.endCol) {
+                    Cell templateCell = templateRow.getCell(bodyColIdx);
+                    String cellContent = getCellContent(templateCell);
+                    
+                    // Skip loop markers
+                    if (cellContent != null && 
+                        (isForColumnLoopStart(cellContent) || isForColumnLoopEnd(cellContent))) {
+                        bodyColIdx++;
+                        continue;
+                    }
+                    
+                    // Regular column (copy cell)
+                    Cell destCell = destRow.createCell(destColIdx);
+                    copyCellContent(templateCell, destCell, loopVars, queryEnvironment,
+                                   templateWorkbook, destinationWorkbook, styleCache, fontCache);
+                    
+                    // Copy column width
+                    int templateWidth = templateRow.getSheet().getColumnWidth(bodyColIdx);
+                    destRow.getSheet().setColumnWidth(destColIdx, templateWidth);
+                    
+                    destColIdx++;
+                    bodyColIdx++;
+                }
             }
         }
         
@@ -771,6 +1259,23 @@ public class M2SpreadsheetUtils {
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
         
+        return processColumnLoopInternal(templateRow, destRow, forColIdx, endforColIdx, destColIdx,
+            forLoop, variables, queryEnvironment, templateWorkbook, destinationWorkbook, 
+            styleCache, fontCache, null);
+    }
+    
+    /**
+     * Internal column loop processing with optional merge tracking.
+     */
+    private static int processColumnLoopInternal(Row templateRow, Row destRow,
+            int forColIdx, int endforColIdx, int destColIdx,
+            ForColumnLoopInfo forLoop, Map<String, Object> variables,
+            IQueryEnvironment queryEnvironment,
+            XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
+            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
+            Map<Short, XSSFFont> fontCache,
+            java.util.List<MergeRegion> parentMergeRegions) {
+        
         // Evaluate the collection expression
         AqlEvaluationResult aqlResult = evaluateAqlExpression(forLoop.collectionExpr, variables, queryEnvironment);
         Object collectionObj = aqlResult.getResult();
@@ -799,6 +1304,64 @@ public class M2SpreadsheetUtils {
         System.out.println("DEBUG: Collection size: " + collection.size());
         System.out.println("DEBUG: Body columns: " + (forColIdx + 1) + " to " + (endforColIdx - 1));
         
+        // Scan template body for merge_column directives
+        int rowNum = templateRow.getRowNum();
+        java.util.List<MergeInfo> mergeCells = new java.util.ArrayList<>();
+        for (int scanColIdx = forColIdx + 1; scanColIdx < endforColIdx; scanColIdx++) {
+            Cell scanCell = templateRow.getCell(scanColIdx);
+            String cellContent = getCellContent(scanCell);
+            if (cellContent == null) continue;
+            
+            // Skip nested for_column markers
+            if (isForColumnLoopStart(cellContent) || isForColumnLoopEnd(cellContent)) {
+                continue;
+            }
+            
+            String mergeColVar = parseMergeColumnDirective(cellContent);
+            String mergeRowVar = parseMergeRowDirective(cellContent);
+            
+            if (mergeColVar != null || mergeRowVar != null) {
+                // Check for multiple directives of same type - not allowed
+                if (mergeColVar != null) {
+                    int count = 0;
+                    int idx = 0;
+                    while ((idx = cellContent.indexOf("{m:merge_column ", idx)) != -1) {
+                        count++;
+                        idx += 16;
+                    }
+                    if (count > 1) {
+                        System.err.println("ERROR: Multiple {m:merge_column} directives in same cell at column " + scanColIdx);
+                        continue;
+                    }
+                }
+                if (mergeRowVar != null) {
+                    int count = 0;
+                    int idx = 0;
+                    while ((idx = cellContent.indexOf("{m:merge_row ", idx)) != -1) {
+                        count++;
+                        idx += 13;
+                    }
+                    if (count > 1) {
+                        System.err.println("ERROR: Multiple {m:merge_row} directives in same cell at column " + scanColIdx);
+                        continue;
+                    }
+                }
+                
+                // Record merge directive(s)
+                if (mergeColVar != null && mergeColVar.equals(forLoop.varName)) {
+                    mergeCells.add(new MergeInfo(mergeColVar, scanColIdx, "column"));
+                    System.out.println("DEBUG: Found merge_column directive: column " + scanColIdx + ", var=" + mergeColVar);
+                }
+                // Note: merge_row directives in column loops are handled by parent row loop
+            }
+        }
+        
+        // Track merge regions to apply after loop
+        java.util.List<MergeRegion> mergeRegions = new java.util.ArrayList<>();
+        
+        // Track first column of each iteration (for merge_column)
+        int iterationStartCol = destColIdx;
+        
         // Iterate over collection
         int index = 0;
         for (Object item : collection) {
@@ -810,6 +1373,9 @@ public class M2SpreadsheetUtils {
             if (index < 3) {  // Debug first 3 iterations
                 System.out.println("DEBUG: Column iteration " + index + ", item: " + item);
             }
+            
+            // Track where this iteration starts
+            int thisIterationStartCol = destColIdx;
             
             index++;
             
@@ -833,12 +1399,13 @@ public class M2SpreadsheetUtils {
                         
                         if (nestedEndforCol > bodyColIdx && nestedEndforCol < endforColIdx) {
                             // Process the nested for_column loop recursively
-                            destColIdx = processColumnLoop(
+                            destColIdx = processColumnLoopInternal(
                                 templateRow, destRow,
                                 bodyColIdx, nestedEndforCol,
                                 destColIdx, nestedForLoop,
                                 loopVars, queryEnvironment,
-                                templateWorkbook, destinationWorkbook, styleCache, fontCache);
+                                templateWorkbook, destinationWorkbook, styleCache, fontCache,
+                                mergeRegions);
                             
                             // Skip to after the nested loop's endfor
                             bodyColIdx = nestedEndforCol + 1;
@@ -866,6 +1433,83 @@ public class M2SpreadsheetUtils {
                 destColIdx++;
                 bodyColIdx++;
             }
+            
+            // After processing all body columns for this iteration, check if we need to record merge regions
+            int thisIterationEndCol = destColIdx - 1;  // Last column of this iteration
+            
+            // For each cell with merge_column directive matching current loop variable
+            for (MergeInfo mergeInfo : mergeCells) {
+                if (mergeInfo.varName.equals(forLoop.varName)) {
+                    // If this iteration spans multiple columns, create merge region
+                    if (thisIterationEndCol > thisIterationStartCol) {
+                        // Merge spans entire iteration width, starting at first column
+                        // (mirrors merge_row which spans entire iteration height in one column)
+                        
+                        // Capture content from first cell of iteration
+                        Cell firstCell = destRow.getCell(thisIterationStartCol);
+                        String content = getCellContent(firstCell);
+                        
+                        // Check if cell also has merge_row directive
+                        String cellContent = getCellContent(templateRow.getCell(mergeInfo.columnIndex));
+                        String mergeRowVar = parseMergeRowDirective(cellContent);
+                        
+                        // Create merge region spanning entire iteration
+                        mergeRegions.add(new MergeRegion(
+                            rowNum, rowNum,  // Single row for now
+                            thisIterationStartCol, thisIterationEndCol,  // Entire iteration span
+                            content
+                        ));
+                        
+                        if (index <= 3) {
+                            System.out.println("DEBUG: Merge region recorded: row " + rowNum + 
+                                             ", columns " + thisIterationStartCol + "-" + thisIterationEndCol);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Apply merge regions after all iterations complete
+        if (!mergeRegions.isEmpty() && parentMergeRegions == null) {
+            System.out.println("DEBUG: Applying " + mergeRegions.size() + " merge_column regions");
+            Sheet sheet = destRow.getSheet();
+            for (MergeRegion merge : mergeRegions) {
+                try {
+                    // Add merged region to sheet
+                    sheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(
+                        merge.firstRow, merge.lastRow, merge.firstCol, merge.lastCol));
+                    
+                    // Write content in first cell and clear others
+                    Row row = sheet.getRow(merge.firstRow);
+                    if (row != null) {
+                        Cell firstCell = row.getCell(merge.firstCol);
+                        if (firstCell == null) {
+                            firstCell = row.createCell(merge.firstCol);
+                        }
+                        // Content should already be there, but ensure merge directive is removed
+                        String cleanContent = removeMergeDirectives(merge.content);
+                        if (cleanContent != null && !cleanContent.trim().isEmpty()) {
+                            firstCell.setCellValue(cleanContent);
+                        }
+                        
+                        // Clear content from other cells in the merged region
+                        for (int col = merge.firstCol + 1; col <= merge.lastCol; col++) {
+                            Cell c = row.getCell(col);
+                            if (c != null) {
+                                c.setBlank();
+                            }
+                        }
+                    }
+                    
+                    System.out.println("DEBUG: Applied merge: row " + merge.firstRow + 
+                                     ", columns " + merge.firstCol + "-" + merge.lastCol);
+                } catch (Exception e) {
+                    System.err.println("ERROR: Failed to apply merge_column region: " + e.getMessage());
+                }
+            }
+        } else if (!mergeRegions.isEmpty() && parentMergeRegions != null) {
+            // Pass merge regions up to parent (for nested loops)
+            parentMergeRegions.addAll(mergeRegions);
         }
         
         System.out.println("DEBUG: For_column loop complete, final dest column: " + destColIdx);
@@ -1209,6 +1853,175 @@ public class M2SpreadsheetUtils {
             this.varName = varName;
             this.collectionExpr = collectionExpr;
         }
+    }
+    
+    // =================================================================
+    // Cell Merging Support (m:merge_row / m:merge_column)
+    // Allows merging cells across loop iterations
+    // 
+    // USAGE:
+    // 
+    // 1. merge_row: Merges cells vertically across for_row loop iterations
+    //    Syntax: {m:merge_row variablename}
+    //    Example:
+    //      {m:for_row component | components}
+    //        {m:for_row detail | component.details}
+    //          {m:merge_row component}{m:component.name}    {m:detail.name}
+    //        {m:endfor_row}
+    //      {m:endfor_row}
+    //    Result: Component name is merged across all detail rows of that component
+    //
+    // 2. merge_column: Merges cells horizontally across for_column loop iterations
+    //    Syntax: {m:merge_column variablename}
+    //    Example:
+    //      {m:for_column phase | phases}
+    //        {m:merge_column phase}{m:phase.name}
+    //        {m:for_column task | phase.tasks}
+    //          {m:task.name}
+    //        {m:endfor_column}
+    //      {m:endfor_column}
+    //    Result: Phase name is merged across all task columns of that phase
+    //
+    // 3. Combination: Both directives can be used together
+    //    Syntax: {m:merge_row var1}{m:merge_column var2}
+    //    Example:
+    //      {m:for_row component | components}
+    //        {m:for_column status | statuses}
+    //          {m:merge_row component}{m:component.name}
+    //        {m:endfor_column}
+    //      {m:endfor_row}
+    //    Result: Component name is merged both vertically and horizontally
+    //
+    // VALIDATION:
+    // - Multiple merge_row directives in same cell: ERROR
+    // - Multiple merge_column directives in same cell: ERROR
+    // - Both merge_row and merge_column in same cell: OK (2D merge)
+    //
+    // IMPLEMENTATION:
+    // - Merge directives are automatically removed from output
+    // - Merges are applied after loop completion
+    // - Content is written to first cell of merged region
+    // - Other cells in merged region are cleared
+    // =================================================================
+    
+    /**
+     * Information about a merge directive in a template cell.
+     */
+    private static class MergeInfo {
+        final String varName;       // Variable name to match (e.g., "component" in {m:merge_row component})
+        final int columnIndex;      // Column where merge should occur
+        final String direction;     // "row" or "column"
+        
+        MergeInfo(String varName, int columnIndex, String direction) {
+            this.varName = varName;
+            this.columnIndex = columnIndex;
+            this.direction = direction;
+        }
+    }
+    
+    /**
+     * Tracks a merge region to be applied after loop completion.
+     */
+    private static class MergeRegion {
+        final int firstRow;
+        final int lastRow;
+        final int firstCol;
+        final int lastCol;
+        final String content;  // Content to write in merged cell
+        
+        MergeRegion(int firstRow, int lastRow, int firstCol, int lastCol, String content) {
+            this.firstRow = firstRow;
+            this.lastRow = lastRow;
+            this.firstCol = firstCol;
+            this.lastCol = lastCol;
+            this.content = content;
+        }
+    }
+    
+    /**
+     * Check if content contains a merge_row directive.
+     */
+    private static boolean hasMergeRowDirective(String content) {
+        if (content == null) return false;
+        return content.contains("{m:merge_row ");
+    }
+    
+    /**
+     * Check if content contains a merge_column directive.
+     */
+    private static boolean hasMergeColumnDirective(String content) {
+        if (content == null) return false;
+        return content.contains("{m:merge_column ");
+    }
+    
+    /**
+     * Parse merge_row directive from cell content.
+     * Format: {m:merge_row variablename}
+     * Returns null if not found or malformed.
+     */
+    private static String parseMergeRowDirective(String content) {
+        if (content == null) return null;
+        
+        int startIdx = content.indexOf("{m:merge_row ");
+        if (startIdx == -1) return null;
+        
+        int endIdx = content.indexOf("}", startIdx);
+        if (endIdx == -1) return null;
+        
+        String directive = content.substring(startIdx + "{m:merge_row ".length(), endIdx).trim();
+        return directive.isEmpty() ? null : directive;
+    }
+    
+    /**
+     * Parse merge_column directive from cell content.
+     * Format: {m:merge_column variablename}
+     * Returns null if not found or malformed.
+     */
+    private static String parseMergeColumnDirective(String content) {
+        if (content == null) return null;
+        
+        int startIdx = content.indexOf("{m:merge_column ");
+        if (startIdx == -1) return null;
+        
+        int endIdx = content.indexOf("}", startIdx);
+        if (endIdx == -1) return null;
+        
+        String directive = content.substring(startIdx + "{m:merge_column ".length(), endIdx).trim();
+        return directive.isEmpty() ? null : directive;
+    }
+    
+    /**
+     * Remove merge directives from cell content.
+     * This removes {m:merge_row ...} and {m:merge_column ...} from the text.
+     */
+    private static String removeMergeDirectives(String content) {
+        if (content == null) return null;
+        
+        String result = content;
+        
+        // Remove merge_row directives
+        while (result.contains("{m:merge_row ")) {
+            int startIdx = result.indexOf("{m:merge_row ");
+            int endIdx = result.indexOf("}", startIdx);
+            if (endIdx != -1) {
+                result = result.substring(0, startIdx) + result.substring(endIdx + 1);
+            } else {
+                break;
+            }
+        }
+        
+        // Remove merge_column directives
+        while (result.contains("{m:merge_column ")) {
+            int startIdx = result.indexOf("{m:merge_column ");
+            int endIdx = result.indexOf("}", startIdx);
+            if (endIdx != -1) {
+                result = result.substring(0, startIdx) + result.substring(endIdx + 1);
+            } else {
+                break;
+            }
+        }
+        
+        return result;
     }
     
     // =================================================================
@@ -2360,13 +3173,27 @@ public class M2SpreadsheetUtils {
                 continue;
             }
             
-            // Skip if this is a for, endfor, if, or endif
+            // Skip if this is a for, endfor, if, endif, merge_row, or merge_column
             if (result.startsWith("{m:for ", startIdx) || 
                 result.startsWith("{m:endfor", startIdx) ||
                 result.startsWith("{m:if ", startIdx) ||
                 result.startsWith("{m:endif", startIdx)) {
                 startIdx += M_FIELD_START.length();
                 continue;
+            }
+            
+            // Remove merge directives (they should be invisible in output)
+            if (result.startsWith("{m:merge_row ", startIdx) || result.startsWith("{m:merge_column ", startIdx)) {
+                int closeBrace = result.indexOf('}', startIdx);
+                if (closeBrace != -1) {
+                    // Remove the entire directive
+                    result = result.substring(0, startIdx) + result.substring(closeBrace + 1);
+                    // Continue at the same position (since we removed content)
+                    continue;
+                } else {
+                    startIdx += M_FIELD_START.length();
+                    continue;
+                }
             }
             
             int endIdx = result.indexOf(FIELD_END, startIdx);
@@ -2447,16 +3274,32 @@ public class M2SpreadsheetUtils {
                 break;
             }
             
-            // Skip if this is a for, endfor, if, endif, elseif, or else
+            // Skip if this is a for, endfor, if, endif, elseif, else, merge_row, or merge_column
             if (text.startsWith("{m:for ", startIdx) || 
                 text.startsWith("{m:endfor", startIdx) ||
                 text.startsWith("{m:if ", startIdx) ||
                 text.startsWith("{m:endif", startIdx) ||
                 text.startsWith("{m:elseif ", startIdx) ||
-                text.startsWith("{m:else}", startIdx)) {
-                // Append the control structure as-is and move past it
-                result = result.append(richText.substring(pos, startIdx + M_FIELD_START.length()));
-                pos = startIdx + M_FIELD_START.length();
+                text.startsWith("{m:else}", startIdx) ||
+                text.startsWith("{m:merge_row ", startIdx) ||
+                text.startsWith("{m:merge_column ", startIdx)) {
+                // Find the closing brace for this directive
+                int closeBrace = text.indexOf('}', startIdx);
+                if (closeBrace != -1) {
+                    // Skip this entire directive (merge directives should be removed, not displayed)
+                    if (text.startsWith("{m:merge_row ", startIdx) || text.startsWith("{m:merge_column ", startIdx)) {
+                        // Don't append merge directives - they should be invisible in output
+                        pos = closeBrace + 1;
+                    } else {
+                        // Append control structures as-is and move past the opening tag
+                        result = result.append(richText.substring(pos, startIdx + M_FIELD_START.length()));
+                        pos = startIdx + M_FIELD_START.length();
+                    }
+                } else {
+                    // No closing brace, skip the start tag
+                    result = result.append(richText.substring(pos, startIdx + M_FIELD_START.length()));
+                    pos = startIdx + M_FIELD_START.length();
+                }
                 continue;
             }
             

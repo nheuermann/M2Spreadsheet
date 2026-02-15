@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "mvn test": true,
+        "java": true,
+        "mvn exec:java": true,
+        "mvn clean": true
+    }
+}
