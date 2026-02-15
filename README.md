@@ -3,6 +3,67 @@ M2Spreadsheet enables the generation of [Office Open XML](https://fr.wikipedia.o
 
 It's inspired by (and originally forked from) M2Doc https://www.m2doc.org/.
 
+# Getting Started
+
+## Prerequisites
+
+Before building M2Spreadsheet, ensure you have:
+- **Java 17 or higher** ([Download](https://adoptium.net/))
+- **Apache Maven 3.6+** ([Download](https://maven.apache.org/download.cgi))
+- **Git** (for cloning the repository)
+- **VS Code** (recommended, with Java Extension Pack)
+
+### Check Prerequisites
+
+Run the automated prerequisites checker:
+
+**Unix/macOS:**
+```bash
+./check-prerequisites.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+.\check-prerequisites.ps1
+```
+
+This script will verify:
+- Java installation and version
+- Maven installation and version
+- Git installation
+- VS Code and recommended extensions (optional)
+- Project structure and required libraries
+
+## Building the Project
+
+### Quick Build
+
+**Unix/macOS:**
+```bash
+cd plugins/io.github.nheuermann.m2spreadsheet
+mvn clean install -DskipTests
+```
+
+**Windows:**
+```cmd
+cd plugins\io.github.nheuermann.m2spreadsheet
+mvn clean install -DskipTests
+```
+
+### Run Tests
+
+**Unix/macOS:**
+```bash
+cd tests/io.github.nheuermann.m2spreadsheet.tests
+mvn test -Dtest=FolderBasedTemplatesTest
+```
+
+**Windows:**
+```cmd
+cd tests\io.github.nheuermann.m2spreadsheet.tests
+mvn test -Dtest=FolderBasedTemplatesTest
+```
+
 # Documentation
 ## Syntax
 ### Repetition / Loops
@@ -229,3 +290,12 @@ Second how to implement it.
     {m:endfor_row}		
     {m:endfor_row}		
   {m:endfor_row}		
+
+
+Option A: Explicit Cross-Product Directive
+  {m:endcross_product}
+Behavior:
+
+cross_product creates the cartesian product
+merge_cross effect merges in the "row direction" (across causes)
+merge_cross cause merges in the "column direction" (across effects)
