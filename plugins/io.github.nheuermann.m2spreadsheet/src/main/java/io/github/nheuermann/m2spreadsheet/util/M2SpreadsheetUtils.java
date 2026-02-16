@@ -25,6 +25,7 @@ import org.eclipse.acceleo.query.runtime.Query;
 import org.eclipse.acceleo.query.runtime.ServiceUtils;
 import org.eclipse.acceleo.query.runtime.impl.QueryBuilderEngine;
 import org.eclipse.acceleo.query.runtime.impl.QueryEvaluationEngine;
+import org.eclipse.emf.common.util.Diagnostic;
 import org.eclipse.emf.common.util.Monitor;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.resource.ResourceSet;
@@ -3212,12 +3213,21 @@ public class M2SpreadsheetUtils {
                 AqlEvaluationResult aqlResult = evaluateAqlExpression(expression, variables, queryEnvironment);
                 value = aqlResult.getResult();
                 
-                // Check for AQL diagnostics
-                if (aqlResult.getDiagnostic() != null && !aqlResult.getDiagnostic().getChildren().isEmpty()) {
+                // Check for AQL diagnostics using M2Doc's pattern:
+                // Check severity != OK to catch INFO, WARNING, and ERROR (not just errors)
+                if (aqlResult.getDiagnostic() != null && aqlResult.getDiagnostic().getSeverity() != Diagnostic.OK) {
                     String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
                     if (!diagnosticMsg.isEmpty()) {
+                        // Show ALL diagnostics (errors + warnings) so users can see issues
                         errorMessage = diagnosticMsg;
                     }
+                }
+                
+                // Additional check: Warn if expression evaluates to null
+                // This catches typos in property names (e.g., ref.datex instead of ref.date)
+                // since AQL doesn't produce diagnostics for missing Map keys (M2Doc has same limitation)
+                if (value == null && errorMessage == null) {
+                    errorMessage = "[WARNING] Expression evaluated to null: May indicate a typo or missing field";
                 }
             } else {
                 // Fallback to simple evaluator if no query environment
@@ -3330,12 +3340,21 @@ public class M2SpreadsheetUtils {
                 AqlEvaluationResult aqlResult = evaluateAqlExpression(expression, variables, queryEnvironment);
                 value = aqlResult.getResult();
                 
-                // Check for AQL diagnostics
-                if (aqlResult.getDiagnostic() != null && !aqlResult.getDiagnostic().getChildren().isEmpty()) {
+                // Check for AQL diagnostics using M2Doc's pattern:
+                // Check severity != OK to catch INFO, WARNING, and ERROR (not just errors)
+                if (aqlResult.getDiagnostic() != null && aqlResult.getDiagnostic().getSeverity() != Diagnostic.OK) {
                     String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
                     if (!diagnosticMsg.isEmpty()) {
+                        // Show ALL diagnostics (errors + warnings) so users can see issues
                         errorMessage = diagnosticMsg;
                     }
+                }
+                
+                // Additional check: Warn if expression evaluates to null
+                // This catches typos in property names (e.g., ref.datex instead of ref.date)
+                // since AQL doesn't produce diagnostics for missing Map keys (M2Doc has same limitation)
+                if (value == null && errorMessage == null) {
+                    errorMessage = "[WARNING] Expression evaluated to null: May indicate a typo or missing field";
                 }
             } else {
                 // Fallback to simple evaluator if no query environment
@@ -3425,10 +3444,10 @@ public class M2SpreadsheetUtils {
      */
     private static class AqlEvaluationResult {
         private final Object result;
-        private final org.eclipse.emf.common.util.Diagnostic diagnostic;
+        private final Diagnostic diagnostic;
         private final boolean hasError;
         
-        public AqlEvaluationResult(Object result, org.eclipse.emf.common.util.Diagnostic diagnostic, boolean hasError) {
+        public AqlEvaluationResult(Object result, Diagnostic diagnostic, boolean hasError) {
             this.result = result;
             this.diagnostic = diagnostic;
             this.hasError = hasError;
@@ -3438,7 +3457,7 @@ public class M2SpreadsheetUtils {
             return result;
         }
         
-        public org.eclipse.emf.common.util.Diagnostic getDiagnostic() {
+        public Diagnostic getDiagnostic() {
             return diagnostic;
         }
         
@@ -3459,8 +3478,8 @@ public class M2SpreadsheetUtils {
         // Parse the expression
         AstResult astResult = queryBuilder.build(expression);
         
-        // Check for parse errors
-        if (!astResult.getDiagnostic().getChildren().isEmpty()) {
+        // Check for parse errors (M2Doc pattern: severity != OK)
+        if (astResult.getDiagnostic().getSeverity() != Diagnostic.OK) {
             return new AqlEvaluationResult(null, astResult.getDiagnostic(), true);
         }
         
@@ -3477,28 +3496,28 @@ public class M2SpreadsheetUtils {
     
     /**
      * Formats diagnostic messages into a string for display in a cell.
-     * Similar to M2Doc's diagnostic message formatting.
+     * Based on M2Doc's appendDiagnosticMessage pattern.
      */
-    private static String formatDiagnosticMessages(org.eclipse.emf.common.util.Diagnostic diagnostic) {
+    private static String formatDiagnosticMessages(Diagnostic diagnostic) {
         if (diagnostic == null || diagnostic.getChildren().isEmpty()) {
             return "";
         }
         
         StringBuilder sb = new StringBuilder();
-        for (org.eclipse.emf.common.util.Diagnostic child : diagnostic.getChildren()) {
+        for (Diagnostic child : diagnostic.getChildren()) {
             if (sb.length() > 0) {
                 sb.append("\n");
             }
             
-            // Add severity prefix
+            // Add severity prefix (M2Doc pattern)
             switch (child.getSeverity()) {
-                case org.eclipse.emf.common.util.Diagnostic.ERROR:
+                case Diagnostic.ERROR:
                     sb.append("[ERROR] ");
                     break;
-                case org.eclipse.emf.common.util.Diagnostic.WARNING:
+                case Diagnostic.WARNING:
                     sb.append("[WARNING] ");
                     break;
-                case org.eclipse.emf.common.util.Diagnostic.INFO:
+                case Diagnostic.INFO:
                     sb.append("[INFO] ");
                     break;
                 default:
@@ -3522,11 +3541,11 @@ public class M2SpreadsheetUtils {
     /**
      * Check if a diagnostic contains errors (not just warnings).
      */
-    private static boolean hasErrors(org.eclipse.emf.common.util.Diagnostic diagnostic) {
-        if (diagnostic.getSeverity() >= org.eclipse.emf.common.util.Diagnostic.ERROR) {
+    private static boolean hasErrors(Diagnostic diagnostic) {
+        if (diagnostic.getSeverity() >= Diagnostic.ERROR) {
             return true;
         }
-        for (org.eclipse.emf.common.util.Diagnostic child : diagnostic.getChildren()) {
+        for (Diagnostic child : diagnostic.getChildren()) {
             if (hasErrors(child)) {
                 return true;
             }
