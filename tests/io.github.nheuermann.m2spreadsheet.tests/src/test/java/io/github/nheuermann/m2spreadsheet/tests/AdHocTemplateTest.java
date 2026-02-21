@@ -160,7 +160,7 @@ public class AdHocTemplateTest {
         // Show validation messages
         if (!result.getValidationMessages().isEmpty()) {
             System.out.println("\n⚠️  Validation Messages:");
-            for (String message : result.getValidationMessages()) {
+            for (io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage message : result.getValidationMessages()) {
                 System.out.println("   - " + message);
             }
         }

@@ -3,6 +3,9 @@ package io.github.nheuermann.m2spreadsheet.generator;
 import java.util.ArrayList;
 import java.util.List;
 
+import io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage;
+import io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel;
+
 /**
  * Result of a spreadsheet generation operation.
  * Contains the generated workbook and any errors or warnings encountered.
@@ -19,9 +22,14 @@ public class GenerationResult {
     private final List<Exception> generationErrors = new ArrayList<>();
     
     /**
-     * The list of validation messages.
+     * The list of validation messages from template validation.
      */
-    private final List<String> validationMessages = new ArrayList<>();
+    private final List<TemplateValidationMessage> validationMessages = new ArrayList<>();
+    
+    /**
+     * The highest validation level found.
+     */
+    private ValidationMessageLevel validationLevel = ValidationMessageLevel.OK;
     
     /**
      * Gets the list of generation errors.
@@ -37,8 +45,26 @@ public class GenerationResult {
      * 
      * @return the validation messages
      */
-    public List<String> getValidationMessages() {
+    public List<TemplateValidationMessage> getValidationMessages() {
         return validationMessages;
+    }
+    
+    /**
+     * Gets the highest validation level.
+     * 
+     * @return the validation level
+     */
+    public ValidationMessageLevel getValidationLevel() {
+        return validationLevel;
+    }
+    
+    /**
+     * Sets the validation level.
+     * 
+     * @param level the validation level
+     */
+    public void setValidationLevel(ValidationMessageLevel level) {
+        this.validationLevel = level;
     }
     
     /**

@@ -1,5 +1,20 @@
 # M2Spreadsheet - Quick Start Guide
 
+## 📦 First-Time Setup
+
+**Important:** Before running any tests, you must install local dependencies:
+
+```bash
+# From project root
+./setup-local-dependencies.sh
+```
+
+This installs required JARs into your local Maven repository (`~/.m2/repository`):
+- `org.eclipse.acceleo.query-7.0.0.jar` - Acceleo Query Language
+- `antlr4-runtime-4.7.2.jar` - ANTLR4 Runtime
+
+**Note:** This must be run once on each new system where you clone the repository.
+
 ## 🎯 What Was Created
 
 A complete standalone testing setup for M2Spreadsheet development in VS Code:

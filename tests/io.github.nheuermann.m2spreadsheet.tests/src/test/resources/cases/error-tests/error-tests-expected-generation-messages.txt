@@ -1,0 +1,17 @@
+ERROR - Malformed {m:if}statement. Syntax: {m:if condition}. Check for missing closing brace }
+ERROR - Invalid if statement: Expression "data.invalidField" is invalid: Feature invalidField not found in EClass TestData
+ERROR - Invalid if statement: Missing matching {m:endif} for {m:if data.value = 'test'}
+ERROR - Malformed {m:elseif} statement. Syntax: {m:elseif condition}. Check for missing closing brace }
+ERROR - Invalid if statement: Expected {m:endif} after {m:else}
+ERROR - Malformed {m:for} statement. Syntax: {m:for var | collection}. Note: For row-level loops use {m:for_row}, for column-level use {m:for_column}
+ERROR - Failed to evaluate for loop collection '{m:for item | data.invalidItems}': Feature invalidItems not found in EClass TestData
+ERROR - Missing {m:endfor} in the same cell
+ERROR - For loop collection is not iterable: data.value
+ERROR - Malformed {m:for_row} command. Syntax: {m:for_row var | collection}
+ERROR - Failed to evaluate for_row collection expression: data.invalidItems
+ERROR - Malformed {m:for_column} command. Syntax: {m:for_column var | collection}
+ERROR - Failed to evaluate for_column collection expression: data.invalidItems
+ERROR - Multiple {m:merge_row} directives in same cell. Only one allowed.
+ERROR - Invalid expression: Feature invalidField not found in EClass TestData
+ERROR - Invalid expression: incomplete or malformed AQL expression
+ERROR - Malformed expression: Missing end tag }

@@ -72,20 +72,16 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Acceleo Query Language (AQL) - Local JARs -->
+        <!-- Acceleo Query Language (AQL) -->
         <dependency>
             <groupId>org.eclipse.acceleo</groupId>
             <artifactId>org.eclipse.acceleo.query</artifactId>
             <version>7.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/../../libs/org.eclipse.acceleo.query-7.0.0.jar</systemPath>
         </dependency>
         <dependency>
             <groupId>org.antlr</groupId>
             <artifactId>antlr4-runtime</artifactId>
             <version>4.7.2</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/../../libs/antlr4-runtime-4.7.2.jar</systemPath>
         </dependency>
     </dependencies>
 
@@ -108,6 +104,10 @@
                     <includes>
                         <include>**/*Test.java</include>
                     </includes>
+                    <!-- Suppress verbose error output -->
+                    <trimStackTrace>true</trimStackTrace>
+                    <printSummary>false</printSummary>
+                    <reportFormat>plain</reportFormat>
                 </configuration>
             </plugin>
         </plugins>

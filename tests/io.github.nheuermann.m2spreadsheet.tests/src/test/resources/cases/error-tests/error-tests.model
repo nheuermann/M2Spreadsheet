@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<errortest:TestData xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:errortest="http://example.com/errortest" value="test">
+  <items name="item1"/>
+  <items name="item2"/>
+</errortest:TestData>

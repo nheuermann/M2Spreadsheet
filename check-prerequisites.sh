@@ -174,18 +174,49 @@ fi
 if [ -d "libs" ]; then
     echo -e "${GREEN}✓${NC} libs directory found"
     
-    # Check for required JARs
-    if [ -f "libs/org.eclipse.acceleo.query-7.0.0.jar" ]; then
-        echo -e "  ${GREEN}✓${NC} Acceleo Query JAR found"
+    # Check for required JARs in libs/
+    ACCELEO_JAR="libs/org.eclipse.acceleo.query-7.0.0.jar"
+    ANTLR_JAR="libs/antlr4-runtime-4.7.2.jar"
+    
+    if [ -f "$ACCELEO_JAR" ]; then
+        echo -e "  ${GREEN}✓${NC} Acceleo Query JAR found in libs/"
     else
         echo -e "  ${RED}✗${NC} Acceleo Query JAR not found in libs/"
         ERRORS=$((ERRORS + 1))
     fi
     
-    if [ -f "libs/antlr4-runtime-4.7.2.jar" ]; then
-        echo -e "  ${GREEN}✓${NC} ANTLR4 Runtime JAR found"
+    if [ -f "$ANTLR_JAR" ]; then
+        echo -e "  ${GREEN}✓${NC} ANTLR4 Runtime JAR found in libs/"
     else
         echo -e "  ${RED}✗${NC} ANTLR4 Runtime JAR not found in libs/"
+        ERRORS=$((ERRORS + 1))
+    fi
+    
+    # Check if JARs are installed in local Maven repository
+    echo -e "  ${BLUE}→${NC} Checking local Maven repository installation..."
+    MAVEN_REPO="$HOME/.m2/repository"
+    ACCELEO_MAVEN="$MAVEN_REPO/org/eclipse/acceleo/org.eclipse.acceleo.query/7.0.0/org.eclipse.acceleo.query-7.0.0.jar"
+    ANTLR_MAVEN="$MAVEN_REPO/org/antlr/antlr4-runtime/4.7.2/antlr4-runtime-4.7.2.jar"
+    
+    NEED_INSTALL=false
+    
+    if [ -f "$ACCELEO_MAVEN" ]; then
+        echo -e "    ${GREEN}✓${NC} Acceleo Query installed in Maven repository"
+    else
+        echo -e "    ${YELLOW}○${NC} Acceleo Query NOT installed in Maven repository"
+        NEED_INSTALL=true
+    fi
+    
+    if [ -f "$ANTLR_MAVEN" ]; then
+        echo -e "    ${GREEN}✓${NC} ANTLR4 Runtime installed in Maven repository"
+    else
+        echo -e "    ${YELLOW}○${NC} ANTLR4 Runtime NOT installed in Maven repository"
+        NEED_INSTALL=true
+    fi
+    
+    if [ "$NEED_INSTALL" = true ]; then
+        echo -e "  ${YELLOW}⚠${NC}  Required JARs need to be installed to Maven repository"
+        echo -e "  ${BLUE}→${NC} Run: ./setup-local-dependencies.sh"
         ERRORS=$((ERRORS + 1))
     fi
 else

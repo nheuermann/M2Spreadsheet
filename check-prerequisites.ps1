@@ -174,18 +174,49 @@ if (Test-Path "tests\io.github.nheuermann.m2spreadsheet.tests") {
 if (Test-Path "libs") {
     Write-Host "✓ libs directory found" -ForegroundColor Green
     
-    # Check for required JARs
-    if (Test-Path "libs\org.eclipse.acceleo.query-7.0.0.jar") {
-        Write-Host "  ✓ Acceleo Query JAR found" -ForegroundColor Green
+    # Check for required JARs in libs/
+    $AcceleoJar = "libs\org.eclipse.acceleo.query-7.0.0.jar"
+    $AntlrJar = "libs\antlr4-runtime-4.7.2.jar"
+    
+    if (Test-Path $AcceleoJar) {
+        Write-Host "  ✓ Acceleo Query JAR found in libs\" -ForegroundColor Green
     } else {
         Write-Host "  ✗ Acceleo Query JAR not found in libs\" -ForegroundColor Red
         $script:Errors++
     }
     
-    if (Test-Path "libs\antlr4-runtime-4.7.2.jar") {
-        Write-Host "  ✓ ANTLR4 Runtime JAR found" -ForegroundColor Green
+    if (Test-Path $AntlrJar) {
+        Write-Host "  ✓ ANTLR4 Runtime JAR found in libs\" -ForegroundColor Green
     } else {
         Write-Host "  ✗ ANTLR4 Runtime JAR not found in libs\" -ForegroundColor Red
+        $script:Errors++
+    }
+    
+    # Check if JARs are installed in local Maven repository
+    Write-Host "  → Checking local Maven repository installation..." -ForegroundColor Blue
+    $MavenRepo = Join-Path $env:USERPROFILE ".m2\repository"
+    $AcceleoMaven = Join-Path $MavenRepo "org\eclipse\acceleo\org.eclipse.acceleo.query\7.0.0\org.eclipse.acceleo.query-7.0.0.jar"
+    $AntlrMaven = Join-Path $MavenRepo "org\antlr\antlr4-runtime\4.7.2\antlr4-runtime-4.7.2.jar"
+    
+    $NeedInstall = $false
+    
+    if (Test-Path $AcceleoMaven) {
+        Write-Host "    ✓ Acceleo Query installed in Maven repository" -ForegroundColor Green
+    } else {
+        Write-Host "    ○ Acceleo Query NOT installed in Maven repository" -ForegroundColor Yellow
+        $NeedInstall = $true
+    }
+    
+    if (Test-Path $AntlrMaven) {
+        Write-Host "    ✓ ANTLR4 Runtime installed in Maven repository" -ForegroundColor Green
+    } else {
+        Write-Host "    ○ ANTLR4 Runtime NOT installed in Maven repository" -ForegroundColor Yellow
+        $NeedInstall = $true
+    }
+    
+    if ($NeedInstall) {
+        Write-Host "  ⚠  Required JARs need to be installed to Maven repository" -ForegroundColor Yellow
+        Write-Host "  → Run: .\setup-local-dependencies.ps1" -ForegroundColor Blue
         $script:Errors++
     }
 } else {

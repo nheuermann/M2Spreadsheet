@@ -122,6 +122,7 @@ public class M2SpreadsheetUtils {
         
         try {
             monitor.beginTask("Generating spreadsheet", 100);
+            
             monitor.subTask("Processing template cells");
             
             // Create destination workbook (clone of template)
@@ -140,6 +141,20 @@ public class M2SpreadsheetUtils {
                 
                 processSheet(templateSheet, destSheet, variables, queryEnvironment, result, 
                            templateWorkbook, destinationWorkbook, styleCache, fontCache);
+            }
+            
+            // Add errors sheet if there are any validation messages
+            if (!result.getValidationMessages().isEmpty()) {
+                io.github.nheuermann.m2spreadsheet.validation.TemplateValidationGenerator validationGenerator = 
+                    new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationGenerator();
+                validationGenerator.addErrorsSheet(destinationWorkbook, result.getValidationMessages());
+                
+                // Update validation level based on collected errors
+                for (io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage msg : result.getValidationMessages()) {
+                    result.setValidationLevel(
+                        io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.updateLevel(
+                            result.getValidationLevel(), msg.getLevel()));
+                }
             }
             
             monitor.worked(80);
@@ -269,7 +284,12 @@ public class M2SpreadsheetUtils {
                         Cell errorCell = destErrorRow.createCell(0);
                         errorCell.setCellValue(firstCellContent + "\n[ERROR] Missing {m:endfor_row} in a following row");
                         result.getValidationMessages().add(
-                            "Warning: {m:for_row} at row " + templateRowNum + " has no matching {m:endfor_row}");
+                            new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                                "{m:for_row} at row " + templateRowNum + " has no matching {m:endfor_row}",
+                                templateSheet.getSheetName(),
+                                templateRowNum,
+                                0));
                         templateRowNum++;
                         destRowNum++;
                     }
@@ -282,7 +302,12 @@ public class M2SpreadsheetUtils {
                 Cell errorCell = destErrorRow.createCell(0);
                 errorCell.setCellValue("{m:endfor_row}\n[ERROR] Missing {m:for_row} in a previous row");
                 result.getValidationMessages().add(
-                    "Warning: Orphaned {m:endfor_row} at row " + templateRowNum);
+                    new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                        io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                        "Orphaned {m:endfor_row} at row " + templateRowNum,
+                        templateSheet.getSheetName(),
+                        templateRowNum,
+                        0));
                 templateRowNum++;
                 destRowNum++;
                 continue;
@@ -290,7 +315,7 @@ public class M2SpreadsheetUtils {
             
             // Regular row (no for loop)
             System.out.println("DEBUG: Copying regular row " + templateRowNum + " to dest row " + destRowNum);
-            copyRow(templateRow, destSheet.createRow(destRowNum), variables, queryEnvironment, sheetColumnLoops,
+            copyRow(templateRow, destSheet.createRow(destRowNum), variables, queryEnvironment, result, sheetColumnLoops,
                    templateWorkbook, destinationWorkbook, styleCache, fontCache);
             destRowNum++;
             templateRowNum++;
@@ -445,7 +470,12 @@ public class M2SpreadsheetUtils {
             collection = java.util.Collections.singletonList(collectionObj);
         } else {
             result.getValidationMessages().add(
-                "Warning: For_row loop collection is null at row " + forRowNum);
+                new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                    io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.WARNING,
+                    "For_row loop collection is null",
+                    templateSheet.getSheetName(),
+                    forRowNum,
+                    0));
             return destRowNum;
         }
         
@@ -583,7 +613,7 @@ public class M2SpreadsheetUtils {
                 if (index <= 3) {  // Debug first 3
                     System.out.println("DEBUG:   Creating dest row " + destRowNum + " from template row " + bodyRowNum);
                 }
-                copyRow(templateRow, destRow, loopVars, queryEnvironment, sheetColumnLoops,
+                copyRow(templateRow, destRow, loopVars, queryEnvironment, result, sheetColumnLoops,
                        templateWorkbook, destinationWorkbook, styleCache, fontCache);
                 destRowNum++;
                 bodyRowNum++;
@@ -674,18 +704,18 @@ public class M2SpreadsheetUtils {
      */
     private static void copyRow(Row templateRow, Row destRow,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
-            List<SheetColumnLoop> sheetColumnLoops,
+            GenerationResult result, List<SheetColumnLoop> sheetColumnLoops,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
         
         // Check if this row contains for_column loops OR if sheet-level column loops exist
         if (hasForColumnLoop(templateRow) || (sheetColumnLoops != null && !sheetColumnLoops.isEmpty())) {
-            copyRowWithColumnLoops(templateRow, destRow, variables, queryEnvironment, sheetColumnLoops,
+            copyRowWithColumnLoops(templateRow, destRow, variables, queryEnvironment, result, sheetColumnLoops,
                                   templateWorkbook, destinationWorkbook, styleCache, fontCache);
         } else {
             // Regular row copy
-            copyRowSimple(templateRow, destRow, variables, queryEnvironment,
+            copyRowSimple(templateRow, destRow, variables, queryEnvironment, result,
                          templateWorkbook, destinationWorkbook, styleCache, fontCache);
         }
     }
@@ -711,7 +741,7 @@ public class M2SpreadsheetUtils {
      */
     private static void copyRowWithColumnLoops(Row templateRow, Row destRow,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
-            List<SheetColumnLoop> sheetColumnLoops,
+            GenerationResult result, List<SheetColumnLoop> sheetColumnLoops,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
@@ -719,18 +749,18 @@ public class M2SpreadsheetUtils {
         // If this row has inline for_column markers, use them (they may have merge_column directives)
         if (hasForColumnLoop(templateRow)) {
             // Use inline for_column processing (original behavior)
-            copyRowWithInlineColumnLoops(templateRow, destRow, variables, queryEnvironment,
+            copyRowWithInlineColumnLoops(templateRow, destRow, variables, queryEnvironment, result,
                                         templateWorkbook, destinationWorkbook, styleCache, fontCache);
             return;
         }
         
         // Otherwise, apply sheet-level column loops
         if (sheetColumnLoops != null && !sheetColumnLoops.isEmpty()) {
-            copyRowWithSheetColumnLoops(templateRow, destRow, variables, queryEnvironment, sheetColumnLoops,
+            copyRowWithSheetColumnLoops(templateRow, destRow, variables, queryEnvironment, result, sheetColumnLoops,
                                        templateWorkbook, destinationWorkbook, styleCache, fontCache);
         } else {
             // Fallback to simple copy
-            copyRowSimple(templateRow, destRow, variables, queryEnvironment,
+            copyRowSimple(templateRow, destRow, variables, queryEnvironment, result,
                          templateWorkbook, destinationWorkbook, styleCache, fontCache);
         }
     }
@@ -740,6 +770,7 @@ public class M2SpreadsheetUtils {
      */
     private static void copyRowWithInlineColumnLoops(Row templateRow, Row destRow,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult result,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
@@ -771,7 +802,7 @@ public class M2SpreadsheetUtils {
                         
                         // Process the for_column loop
                         destColIdx = processColumnLoop(templateRow, destRow, templateColIdx, endforColIdx,
-                                                     destColIdx, forLoop, variables, queryEnvironment,
+                                                     destColIdx, forLoop, variables, queryEnvironment, result,
                                                      templateWorkbook, destinationWorkbook, styleCache, fontCache);
                         
                         // Skip to after endfor_column
@@ -801,7 +832,8 @@ public class M2SpreadsheetUtils {
             
             // Regular cell copy
             Cell destCell = destRow.createCell(destColIdx);
-            copyCellContent(templateCell, destCell, variables, queryEnvironment,
+            String destSheetName = destRow.getSheet().getSheetName();
+            copyCellContent(templateCell, destCell, variables, queryEnvironment, result, destSheetName,
                            templateWorkbook, destinationWorkbook, styleCache, fontCache);
             destColIdx++;
             templateColIdx++;
@@ -817,7 +849,7 @@ public class M2SpreadsheetUtils {
      */
     private static void copyRowWithSheetColumnLoops(Row templateRow, Row destRow,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
-            List<SheetColumnLoop> sheetColumnLoops,
+            GenerationResult result, List<SheetColumnLoop> sheetColumnLoops,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
@@ -835,7 +867,8 @@ public class M2SpreadsheetUtils {
             while (templateColIdx < loop.startCol) {
                 Cell templateCell = templateRow.getCell(templateColIdx);
                 Cell destCell = destRow.createCell(destColIdx);
-                copyCellContent(templateCell, destCell, variables, queryEnvironment,
+                String destSheetName = destRow.getSheet().getSheetName();
+                copyCellContent(templateCell, destCell, variables, queryEnvironment, result, destSheetName,
                                templateWorkbook, destinationWorkbook, styleCache, fontCache);
                 
                 // Copy column width
@@ -848,7 +881,7 @@ public class M2SpreadsheetUtils {
             
             // Expand this loop
             destColIdx = expandRowWithLoop(templateRow, destRow, loop, destColIdx,
-                                          variables, queryEnvironment,
+                                          variables, queryEnvironment, result,
                                           templateWorkbook, destinationWorkbook, styleCache, fontCache);
             
             // Skip past the loop in template
@@ -859,7 +892,8 @@ public class M2SpreadsheetUtils {
         while (templateColIdx < lastCellNum) {
             Cell templateCell = templateRow.getCell(templateColIdx);
             Cell destCell = destRow.createCell(destColIdx);
-            copyCellContent(templateCell, destCell, variables, queryEnvironment,
+            String destSheetName = destRow.getSheet().getSheetName();
+            copyCellContent(templateCell, destCell, variables, queryEnvironment, result, destSheetName,
                            templateWorkbook, destinationWorkbook, styleCache, fontCache);
             
             // Copy column width
@@ -886,6 +920,7 @@ public class M2SpreadsheetUtils {
     private static int expandRowWithLoop(Row templateRow, Row destRow,
             SheetColumnLoop loop, int destColIdx,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult result,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
@@ -1006,7 +1041,7 @@ public class M2SpreadsheetUtils {
                                          " (var=" + childLoop.varName + ")");
                     }
                     destColIdx = expandRowWithLoop(templateRow, destRow, childLoop, destColIdx,
-                                                  loopVars, queryEnvironment,
+                                                  loopVars, queryEnvironment, result,
                                                   templateWorkbook, destinationWorkbook, styleCache, fontCache);
                     // Skip past the nested loop
                     templateColIdx = childLoop.endCol + 1;
@@ -1029,7 +1064,8 @@ public class M2SpreadsheetUtils {
                                       " to destCol " + destColIdx + " (row " + templateRow.getRowNum() + ")");
                 }
                 Cell destCell = destRow.createCell(destColIdx);
-                copyCellContent(templateCell, destCell, loopVars, queryEnvironment,
+                String destSheetName = destRow.getSheet().getSheetName();
+                copyCellContent(templateCell, destCell, loopVars, queryEnvironment, result, destSheetName,
                                templateWorkbook, destinationWorkbook, styleCache, fontCache);
                 
                 // Copy column width
@@ -1118,31 +1154,12 @@ public class M2SpreadsheetUtils {
     }
     
     /**
-     * OLD IMPLEMENTATION - Remove or replace
-     */
-    private static void copyRowWithSheetColumnLoops_OLD(Row templateRow, Row destRow,
-            Map<String, Object> variables, IQueryEnvironment queryEnvironment,
-            List<SheetColumnLoop> sheetColumnLoops,
-            XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
-            Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
-            Map<Short, XSSFFont> fontCache) {
-        
-        System.out.println("DEBUG: copyRowWithSheetColumnLoops for row " + templateRow.getRowNum() + 
-                          ", " + sheetColumnLoops.size() + " sheet loops");
-        
-        int destColIdx = 0;
-        int templateColIdx = 0;
-        short lastCellNum = templateRow.getLastCellNum();
-        
-        System.out.println("DEBUG:   lastCellNum=" + lastCellNum);
-    }
-    
-    /**
      * Apply a sheet-level column loop to a row.
      */
     private static int applySheetColumnLoop(Row templateRow, Row destRow,
             SheetColumnLoop loop, int destColIdx,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult result,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
@@ -1183,7 +1200,7 @@ public class M2SpreadsheetUtils {
                 for (SheetColumnLoop childLoop : loop.childLoops) {
                     destColIdx = applySheetColumnLoop(
                         templateRow, destRow, childLoop, destColIdx,
-                        loopVars, queryEnvironment,
+                        loopVars, queryEnvironment, result,
                         templateWorkbook, destinationWorkbook, styleCache, fontCache
                     );
                 }
@@ -1203,7 +1220,8 @@ public class M2SpreadsheetUtils {
                     
                     // Regular column (copy cell)
                     Cell destCell = destRow.createCell(destColIdx);
-                    copyCellContent(templateCell, destCell, loopVars, queryEnvironment,
+                    String destSheetName = destRow.getSheet().getSheetName();
+                    copyCellContent(templateCell, destCell, loopVars, queryEnvironment, result, destSheetName,
                                    templateWorkbook, destinationWorkbook, styleCache, fontCache);
                     
                     // Copy column width
@@ -1256,12 +1274,13 @@ public class M2SpreadsheetUtils {
             int forColIdx, int endforColIdx, int destColIdx,
             ForColumnLoopInfo forLoop, Map<String, Object> variables,
             IQueryEnvironment queryEnvironment,
+            GenerationResult result,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
         
         return processColumnLoopInternal(templateRow, destRow, forColIdx, endforColIdx, destColIdx,
-            forLoop, variables, queryEnvironment, templateWorkbook, destinationWorkbook, 
+            forLoop, variables, queryEnvironment, result, templateWorkbook, destinationWorkbook, 
             styleCache, fontCache, null);
     }
     
@@ -1272,6 +1291,7 @@ public class M2SpreadsheetUtils {
             int forColIdx, int endforColIdx, int destColIdx,
             ForColumnLoopInfo forLoop, Map<String, Object> variables,
             IQueryEnvironment queryEnvironment,
+            GenerationResult result,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache,
@@ -1404,7 +1424,7 @@ public class M2SpreadsheetUtils {
                                 templateRow, destRow,
                                 bodyColIdx, nestedEndforCol,
                                 destColIdx, nestedForLoop,
-                                loopVars, queryEnvironment,
+                                loopVars, queryEnvironment, result,
                                 templateWorkbook, destinationWorkbook, styleCache, fontCache,
                                 mergeRegions);
                             
@@ -1424,7 +1444,8 @@ public class M2SpreadsheetUtils {
                 
                 // Regular column (no nested for_column)
                 Cell destCell = destRow.createCell(destColIdx);
-                copyCellContent(templateCell, destCell, loopVars, queryEnvironment,
+                String destSheetName = destRow.getSheet().getSheetName();
+                copyCellContent(templateCell, destCell, loopVars, queryEnvironment, result, destSheetName,
                                templateWorkbook, destinationWorkbook, styleCache, fontCache);
                 
                 // Copy column width from template column to destination column
@@ -1522,6 +1543,7 @@ public class M2SpreadsheetUtils {
      */
     private static void copyRowSimple(Row templateRow, Row destRow,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult result,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
@@ -1533,7 +1555,8 @@ public class M2SpreadsheetUtils {
             Cell templateCell = templateRow.getCell(cellIdx);
             Cell destCell = destRow.createCell(cellIdx);
             
-            copyCellContent(templateCell, destCell, variables, queryEnvironment,
+            String destSheetName = destRow.getSheet().getSheetName();
+            copyCellContent(templateCell, destCell, variables, queryEnvironment, result, destSheetName,
                            templateWorkbook, destinationWorkbook, styleCache, fontCache);
         }
         
@@ -1546,6 +1569,7 @@ public class M2SpreadsheetUtils {
      */
     private static void copyCellContent(Cell templateCell, Cell destCell,
             Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult result, String destSheetName,
             XSSFWorkbook templateWorkbook, XSSFWorkbook destinationWorkbook,
             Map<Short, org.apache.poi.ss.usermodel.CellStyle> styleCache,
             Map<Short, XSSFFont> fontCache) {
@@ -1554,12 +1578,17 @@ public class M2SpreadsheetUtils {
             return;
         }
         
+        // Get destination coordinates
+        int destRowIndex = destCell.getRowIndex();
+        int destColIndex = destCell.getColumnIndex();
+        
         // Get cell content as rich text (preserves formatting)
         RichTextContent richContent = getRichTextContent(templateCell);
         
         if (richContent != null && containsExpression(richContent.text)) {
             // Evaluate and replace expressions, preserving formatting
-            RichTextContent evaluated = evaluateRichTextExpressions(richContent, variables, queryEnvironment);
+            RichTextContent evaluated = evaluateRichTextExpressions(richContent, variables, queryEnvironment, 
+                                                                     result, destSheetName, destRowIndex, destColIndex);
             
             // Apply rich text to destination cell (if XSSF cell)
             if (destCell instanceof XSSFCell) {
@@ -2076,28 +2105,6 @@ public class M2SpreadsheetUtils {
     }
     
     /**
-     * Find the column containing {m:endfor_column} in the first row.
-     * Searches horizontally for the endfor_column marker.
-     * @deprecated - Use findEndForColumnInRow instead for row-specific search
-     */
-    private static int findEndForColumnLoop(Sheet sheet, int startCol) {
-        Row firstRow = sheet.getRow(0);
-        if (firstRow == null) return -1;
-        
-        int lastCol = firstRow.getLastCellNum();
-        for (int colNum = startCol; colNum < lastCol; colNum++) {
-            Cell cell = firstRow.getCell(colNum);
-            if (cell != null) {
-                String content = getCellContent(cell);
-                if (isForColumnLoopEnd(content)) {
-                    return colNum;
-                }
-            }
-        }
-        return -1;
-    }
-    
-    /**
      * Data class for for_column loop information.
      */
     private static class ForColumnLoopInfo {
@@ -2449,16 +2456,6 @@ public class M2SpreadsheetUtils {
     }
     
     /**
-     * Find matching {m:endif} for {m:if} at given position, handling nesting.
-     * @deprecated Use findNextIfControl instead for better elseif/else support
-     */
-    @Deprecated
-    private static int findMatchingEndIf(String text, int ifStartPos) {
-        FindIfEndResult result = findNextIfControl(text, ifStartPos);
-        return result != null && result.type == FindIfEndResult.Type.ENDIF ? result.position : -1;
-    }
-    
-    /**
      * Process within-cell if statements in the text.
      * This handles {m:if condition} ... [{m:elseif condition}]* [{m:else}]? {m:endif} patterns within a single cell.
      * Supports nesting and sequential if statements.
@@ -2511,7 +2508,8 @@ public class M2SpreadsheetUtils {
      * This is the rich text version of processIfStatements that tracks formatting through transformations.
      */
     private static RichTextContent processIfStatementsRichText(RichTextContent richText, 
-            Map<String, Object> variables, IQueryEnvironment queryEnvironment) {
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult genResult, String destSheetName, int destRowIndex, int destColIndex) {
         
         if (richText == null || richText.text == null) {
             return richText;
@@ -2543,6 +2541,18 @@ public class M2SpreadsheetUtils {
             if (ifInfo == null) {
                 // Parse error, include the malformed part
                 parts.add(richText.substring(ifStartPos, Math.min(ifStartPos + "{m:if ".length(), text.length())));
+                
+                // Record error in GenerationResult
+                if (genResult != null) {
+                    genResult.getValidationMessages().add(
+                        new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                            io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                            "Malformed {m:if} statement. Syntax: {m:if condition}. Check for missing closing brace }",
+                            destSheetName,
+                            destRowIndex,
+                            destColIndex));
+                }
+                
                 pos = ifStartPos + "{m:if ".length();
                 continue;
             }
@@ -2553,7 +2563,8 @@ public class M2SpreadsheetUtils {
             
             // Process the complete if/elseif/else/endif structure
             RichTextContent ifResult = processCompleteIfStructureRichText(richText, ifStartPos, ifInfo, 
-                    variables, queryEnvironment, expressionFont);
+                    variables, queryEnvironment, expressionFont,
+                    genResult, destSheetName, destRowIndex, destColIndex);
             
             if (ifResult != null) {
                 parts.add(ifResult);
@@ -2600,18 +2611,30 @@ public class M2SpreadsheetUtils {
      */
     private static RichTextContent processCompleteIfStructureRichText(RichTextContent richText, 
             int ifStartPos, IfInfo ifInfo, Map<String, Object> variables, 
-            IQueryEnvironment queryEnvironment, XSSFFont expressionFont) {
+            IQueryEnvironment queryEnvironment, XSSFFont expressionFont,
+            GenerationResult genResult, String destSheetName, int destRowIndex, int destColIndex) {
         
         String text = richText.text;
         boolean conditionMatched = false;
         int currentPos = ifInfo.ifEndPos;
         
         // Evaluate the main if condition
-        boolean ifCondition = evaluateCondition(ifInfo.condition, variables, queryEnvironment);
+        boolean ifCondition = evaluateCondition(ifInfo.condition, variables, queryEnvironment,
+                genResult, destSheetName, destRowIndex, destColIndex);
         
         // Find the next control structure (elseif, else, or endif)
         FindIfEndResult controlResult = findNextIfControl(text, ifStartPos);
         if (controlResult == null) {
+            // Record error in GenerationResult
+            if (genResult != null) {
+                genResult.getValidationMessages().add(
+                    new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                        io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                        "Invalid if statement: Missing matching {m:endif} for {m:if " + ifInfo.condition + "}",
+                        destSheetName,
+                        destRowIndex,
+                        destColIndex));
+            }
             return null;
         }
         
@@ -2621,7 +2644,7 @@ public class M2SpreadsheetUtils {
         
         if (ifCondition) {
             // If condition was true, process the then body
-            result = processIfStatementsRichText(thenBody, variables, queryEnvironment);
+            result = processIfStatementsRichText(thenBody, variables, queryEnvironment, genResult, destSheetName, destRowIndex, destColIndex);
             conditionMatched = true;
         }
         
@@ -2634,12 +2657,32 @@ public class M2SpreadsheetUtils {
                 // Parse the elseif condition
                 IfInfo elseIfInfo = parseIf(text, currentPos);
                 if (elseIfInfo == null) {
+                    // Record error in GenerationResult
+                    if (genResult != null) {
+                        genResult.getValidationMessages().add(
+                            new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                                "Malformed {m:elseif} statement. Syntax: {m:elseif condition}. Check for missing closing brace }",
+                                destSheetName,
+                                destRowIndex,
+                                destColIndex));
+                    }
                     return null;
                 }
                 
                 // Find next control structure after this elseif
                 FindIfEndResult nextControl = findNextIfControl(text, currentPos);
                 if (nextControl == null) {
+                    // Record error in GenerationResult
+                    if (genResult != null) {
+                        genResult.getValidationMessages().add(
+                            new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                                "Invalid elseif statement: Missing {m:elseif}, {m:else}, or {m:endif} after {m:elseif " + elseIfInfo.condition + "}",
+                                destSheetName,
+                                destRowIndex,
+                                destColIndex));
+                    }
                     return null;
                 }
                 
@@ -2647,9 +2690,10 @@ public class M2SpreadsheetUtils {
                 RichTextContent elseIfBody = richText.substring(elseIfInfo.ifEndPos, nextControl.position);
                 
                 // Evaluate condition
-                boolean elseIfCondition = evaluateCondition(elseIfInfo.condition, variables, queryEnvironment);
+                boolean elseIfCondition = evaluateCondition(elseIfInfo.condition, variables, queryEnvironment,
+                        genResult, destSheetName, destRowIndex, destColIndex);
                 if (elseIfCondition) {
-                    result = processIfStatementsRichText(elseIfBody, variables, queryEnvironment);
+                    result = processIfStatementsRichText(elseIfBody, variables, queryEnvironment, genResult, destSheetName, destRowIndex, destColIndex);
                     conditionMatched = true;
                 }
                 
@@ -2663,6 +2707,16 @@ public class M2SpreadsheetUtils {
                 // Find the endif
                 FindIfEndResult endifResult = findNextIfControl(text, currentPos);
                 if (endifResult == null || endifResult.type != FindIfEndResult.Type.ENDIF) {
+                    // Record error in GenerationResult
+                    if (genResult != null) {
+                        genResult.getValidationMessages().add(
+                            new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                                "Invalid if statement: Expected {m:endif} after {m:else}",
+                                destSheetName,
+                                destRowIndex,
+                                destColIndex));
+                    }
                     return null;
                 }
                 
@@ -2670,7 +2724,7 @@ public class M2SpreadsheetUtils {
                 RichTextContent elseBody = richText.substring(elseEndPos, endifResult.position);
                 
                 // Process else body
-                result = processIfStatementsRichText(elseBody, variables, queryEnvironment);
+                result = processIfStatementsRichText(elseBody, variables, queryEnvironment, genResult, destSheetName, destRowIndex, destColIndex);
                 conditionMatched = true;
                 
                 break; // Endif will follow
@@ -2784,16 +2838,26 @@ public class M2SpreadsheetUtils {
     
     /**
      * Evaluate a condition expression and return boolean result.
+     * Records error in GenerationResult if evaluation fails.
      */
     private static boolean evaluateCondition(String condition, Map<String, Object> variables,
-            IQueryEnvironment queryEnvironment) {
+            IQueryEnvironment queryEnvironment, GenerationResult genResult, 
+            String destSheetName, int destRowIndex, int destColIndex) {
         
         AqlEvaluationResult aqlResult = evaluateAqlExpression(condition, variables, queryEnvironment);
         
         if (aqlResult.hasError()) {
-            String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
-            System.err.println("ERROR: Failed to evaluate if condition: " + condition);
-            System.err.println("       " + diagnosticMsg);
+            // Record error in GenerationResult
+            if (genResult != null) {
+                String diagnosticMsg = formatDiagnosticMessages(aqlResult.getDiagnostic());
+                genResult.getValidationMessages().add(
+                    new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                        io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                        "Invalid if statement: Expression \"" + condition + "\" is invalid: " + diagnosticMsg,
+                        destSheetName,
+                        destRowIndex,
+                        destColIndex));
+            }
             return false;
         }
         
@@ -2810,6 +2874,15 @@ public class M2SpreadsheetUtils {
         } else {
             return (value != null);
         }
+    }
+    
+    /**
+     * Evaluate a condition expression and return boolean result (legacy version without error reporting).
+     * Used by the non-rich-text processing path.
+     */
+    private static boolean evaluateCondition(String condition, Map<String, Object> variables,
+            IQueryEnvironment queryEnvironment) {
+        return evaluateCondition(condition, variables, queryEnvironment, null, null, -1, -1);
     }
     
     /**
@@ -2914,14 +2987,14 @@ public class M2SpreadsheetUtils {
             if (forStartPos == -1) {
                 // No more for loops, process remaining text
                 String remaining = text.substring(pos);
-                result.append(processNonLoopExpressions(remaining, variables, queryEnvironment));
+                result.append(processNonLoopExpressions(remaining, variables, queryEnvironment, null, null, -1, -1));
                 break;
             }
             
             // Append text before the for loop
             if (forStartPos > pos) {
                 String beforeLoop = text.substring(pos, forStartPos);
-                result.append(processNonLoopExpressions(beforeLoop, variables, queryEnvironment));
+                result.append(processNonLoopExpressions(beforeLoop, variables, queryEnvironment, null, null, -1, -1));
             }
             
             // Parse for loop
@@ -3024,7 +3097,8 @@ public class M2SpreadsheetUtils {
      * @return Rich text content with loops expanded and formatting preserved
      */
     private static RichTextContent processForLoopsRichText(RichTextContent richText, 
-            Map<String, Object> variables, IQueryEnvironment queryEnvironment) {
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult genResult, String destSheetName, int destRowIndex, int destColIndex) {
         
         String text = richText.text;
         RichTextContent result = RichTextContent.plain("");
@@ -3038,7 +3112,7 @@ public class M2SpreadsheetUtils {
                 // No more for loops, process remaining text
                 RichTextContent remaining = richText.substring(pos);
                 RichTextContent processedRemaining = processNonLoopExpressionsRichText(
-                    remaining, variables, queryEnvironment);
+                    remaining, variables, queryEnvironment, genResult, destSheetName, destRowIndex, destColIndex);
                 result = result.append(processedRemaining);
                 break;
             }
@@ -3047,7 +3121,7 @@ public class M2SpreadsheetUtils {
             if (forStartPos > pos) {
                 RichTextContent beforeLoop = richText.substring(pos, forStartPos);
                 RichTextContent processedBefore = processNonLoopExpressionsRichText(
-                    beforeLoop, variables, queryEnvironment);
+                    beforeLoop, variables, queryEnvironment, genResult, destSheetName, destRowIndex, destColIndex);
                 result = result.append(processedBefore);
             }
             
@@ -3064,6 +3138,18 @@ public class M2SpreadsheetUtils {
                 String errorMsg = "\n[ERROR] Malformed {m:for} statement. Syntax: {m:for var | collection}\n" +
                                   "        Note: For row-level loops use {m:for_row}, for column-level use {m:for_column}";
                 result = result.append(errorPart).append(new RichTextContent(errorMsg, new ArrayList<>()));
+                
+                // Record error in GenerationResult
+                if (genResult != null) {
+                    genResult.getValidationMessages().add(
+                        new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                            io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                            "Malformed {m:for} statement. Syntax: {m:for var | collection}. Note: For row-level loops use {m:for_row}, for column-level use {m:for_column}",
+                            destSheetName,
+                            destRowIndex,
+                            destColIndex));
+                }
+                
                 pos = forStartPos + "{m:for ".length();
                 continue;
             }
@@ -3075,6 +3161,18 @@ public class M2SpreadsheetUtils {
                 RichTextContent errorPart = richText.substring(forStartPos, forInfo.endPos);
                 String errorMsg = "\n[ERROR] Missing {m:endfor} in the same cell";
                 result = result.append(errorPart).append(new RichTextContent(errorMsg, new ArrayList<>()));
+                
+                // Record error in GenerationResult
+                if (genResult != null) {
+                    genResult.getValidationMessages().add(
+                        new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                            io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                            "Missing {m:endfor} in the same cell",
+                            destSheetName,
+                            destRowIndex,
+                            destColIndex));
+                }
+                
                 pos = forInfo.endPos;
                 continue;
             }
@@ -3096,6 +3194,18 @@ public class M2SpreadsheetUtils {
                                   "\n        Note: Variables defined in for loops are only available within that loop's body." +
                                   "\n              For row iteration use {m:for_row}, for column iteration use {m:for_column}";
                 result = result.append(new RichTextContent(errorMsg, new ArrayList<>()));
+                
+                // Record error in GenerationResult
+                if (genResult != null) {
+                    genResult.getValidationMessages().add(
+                        new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                            io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                            "Failed to evaluate for loop collection '{m:for " + forInfo.varName + " | " + forInfo.collectionExpr + "}': " + diagnosticMsg,
+                            destSheetName,
+                            destRowIndex,
+                            destColIndex));
+                }
+                
                 pos = endForPos + "{m:endfor}".length();
                 continue;
             }
@@ -3117,7 +3227,8 @@ public class M2SpreadsheetUtils {
                     
                     // Recursively process body (may contain nested loops or expressions)
                     RichTextContent iterationResult = processForLoopsRichText(
-                        bodyContent, iterationVars, queryEnvironment);
+                        bodyContent, iterationVars, queryEnvironment,
+                        genResult, destSheetName, destRowIndex, destColIndex);
                     
                     // If the result lost formatting (fell back to plain text), 
                     // and we have an expressionFont, apply it
@@ -3139,6 +3250,18 @@ public class M2SpreadsheetUtils {
                                   "        Evaluated to: " + (collectionObj != null ? collectionObj.getClass().getSimpleName() : "null") + "\n" +
                                   "        Expected a collection or list.";
                 result = result.append(new RichTextContent(errorMsg, new ArrayList<>()));
+                
+                // Record error in GenerationResult
+                if (genResult != null) {
+                    String evaluatedType = (collectionObj != null ? collectionObj.getClass().getSimpleName() : "null");
+                    genResult.getValidationMessages().add(
+                        new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                            io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR,
+                            "For loop collection '{m:for " + forInfo.varName + " | " + forInfo.collectionExpr + "}' is not iterable. Evaluated to: " + evaluatedType + ". Expected a collection or list.",
+                            destSheetName,
+                            destRowIndex,
+                            destColIndex));
+                }
             }
             
             // Move past the endfor
@@ -3159,36 +3282,37 @@ public class M2SpreadsheetUtils {
      * This is separated to avoid infinite recursion.
      */
     private static String processNonLoopExpressions(String text, Map<String, Object> variables,
-            IQueryEnvironment queryEnvironment) {
-        String result = text;
+            IQueryEnvironment queryEnvironment, GenerationResult result, 
+            String destSheetName, int destRowIndex, int destColIndex) {
+        String resultText = text;
         
         // Find all {m:expression} patterns (but not {m:for, {m:endfor, {m:if, {m:endif})
         int startIdx = 0;
-        while ((startIdx = result.indexOf(M_FIELD_START, startIdx)) != -1) {
+        while ((startIdx = resultText.indexOf(M_FIELD_START, startIdx)) != -1) {
             // Check for orphaned endfor (endfor without matching for)
-            if (result.startsWith("{m:endfor}", startIdx)) {
+            if (resultText.startsWith("{m:endfor}", startIdx)) {
                 String errorMsg = "\n[ERROR] Missing {m:for} in the same cell";
-                result = result.substring(0, startIdx) + result.substring(startIdx, startIdx + "{m:endfor}".length()) + 
-                         errorMsg + result.substring(startIdx + "{m:endfor}".length());
+                resultText = resultText.substring(0, startIdx) + resultText.substring(startIdx, startIdx + "{m:endfor}".length()) + 
+                         errorMsg + resultText.substring(startIdx + "{m:endfor}".length());
                 startIdx += "{m:endfor}".length() + errorMsg.length();
                 continue;
             }
             
             // Skip if this is a for, endfor, if, endif, merge_row, or merge_column
-            if (result.startsWith("{m:for ", startIdx) || 
-                result.startsWith("{m:endfor", startIdx) ||
-                result.startsWith("{m:if ", startIdx) ||
-                result.startsWith("{m:endif", startIdx)) {
+            if (resultText.startsWith("{m:for ", startIdx) || 
+                resultText.startsWith("{m:endfor", startIdx) ||
+                resultText.startsWith("{m:if ", startIdx) ||
+                resultText.startsWith("{m:endif", startIdx)) {
                 startIdx += M_FIELD_START.length();
                 continue;
             }
             
             // Remove merge directives (they should be invisible in output)
-            if (result.startsWith("{m:merge_row ", startIdx) || result.startsWith("{m:merge_column ", startIdx)) {
-                int closeBrace = result.indexOf('}', startIdx);
+            if (resultText.startsWith("{m:merge_row ", startIdx) || resultText.startsWith("{m:merge_column ", startIdx)) {
+                int closeBrace = resultText.indexOf('}', startIdx);
                 if (closeBrace != -1) {
                     // Remove the entire directive
-                    result = result.substring(0, startIdx) + result.substring(closeBrace + 1);
+                    resultText = resultText.substring(0, startIdx) + resultText.substring(closeBrace + 1);
                     // Continue at the same position (since we removed content)
                     continue;
                 } else {
@@ -3197,13 +3321,13 @@ public class M2SpreadsheetUtils {
                 }
             }
             
-            int endIdx = result.indexOf(FIELD_END, startIdx);
+            int endIdx = resultText.indexOf(FIELD_END, startIdx);
             if (endIdx == -1) {
                 break;
             }
             
             // Extract expression (without {m: and })
-            String expression = result.substring(startIdx + M_FIELD_START.length(), endIdx).trim();
+            String expression = resultText.substring(startIdx + M_FIELD_START.length(), endIdx).trim();
             
             // Evaluate using AQL
             Object value = null;
@@ -3220,6 +3344,22 @@ public class M2SpreadsheetUtils {
                     if (!diagnosticMsg.isEmpty()) {
                         // Show ALL diagnostics (errors + warnings) so users can see issues
                         errorMessage = diagnosticMsg;
+                        
+                        // Record error in GenerationResult with output cell location
+                        if (result != null) {
+                            io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel level = 
+                                aqlResult.getDiagnostic().getSeverity() == Diagnostic.ERROR ?
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR :
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.WARNING;
+                            
+                            result.getValidationMessages().add(
+                                new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                                    level,
+                                    "Expression '{m:" + expression + "}': " + diagnosticMsg,
+                                    destSheetName,
+                                    destRowIndex,
+                                    destColIndex));
+                        }
                     }
                 }
                 
@@ -3228,6 +3368,17 @@ public class M2SpreadsheetUtils {
                 // since AQL doesn't produce diagnostics for missing Map keys (M2Doc has same limitation)
                 if (value == null && errorMessage == null) {
                     errorMessage = "[WARNING] Expression evaluated to null: May indicate a typo or missing field";
+                    
+                    // Record warning in GenerationResult
+                    if (result != null) {
+                        result.getValidationMessages().add(
+                            new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.WARNING,
+                                "Expression '{m:" + expression + "}' evaluated to null: May indicate a typo or missing field",
+                                destSheetName,
+                                destRowIndex,
+                                destColIndex));
+                    }
                 }
             } else {
                 // Fallback to simple evaluator if no query environment
@@ -3241,17 +3392,17 @@ public class M2SpreadsheetUtils {
             String replacement;
             if (errorMessage != null) {
                 // Show original expression with error message
-                replacement = result.substring(startIdx, endIdx + 1) + "\n" + errorMessage;
+                replacement = resultText.substring(startIdx, endIdx + 1) + "\n" + errorMessage;
             } else {
                 replacement = value != null ? value.toString() : "";
             }
             
             // Replace the expression with its value
-            result = result.substring(0, startIdx) + replacement + result.substring(endIdx + 1);
+            resultText = resultText.substring(0, startIdx) + replacement + resultText.substring(endIdx + 1);
             startIdx += replacement.length();
         }
         
-        return result;
+        return resultText;
     }
     
     /**
@@ -3268,7 +3419,8 @@ public class M2SpreadsheetUtils {
      * @return Rich text content with expressions evaluated and formatting preserved
      */
     private static RichTextContent processNonLoopExpressionsRichText(RichTextContent richText,
-            Map<String, Object> variables, IQueryEnvironment queryEnvironment) {
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult genResult, String destSheetName, int destRowIndex, int destColIndex) {
         
         String text = richText.text;
         RichTextContent result = RichTextContent.plain("");
@@ -3347,6 +3499,22 @@ public class M2SpreadsheetUtils {
                     if (!diagnosticMsg.isEmpty()) {
                         // Show ALL diagnostics (errors + warnings) so users can see issues
                         errorMessage = diagnosticMsg;
+                        
+                        // Record error in GenerationResult with output cell location
+                        if (genResult != null) {
+                            io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel level = 
+                                aqlResult.getDiagnostic().getSeverity() == Diagnostic.ERROR ?
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR :
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.WARNING;
+                            
+                            genResult.getValidationMessages().add(
+                                new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                                    level,
+                                    "Expression '{m:" + expression + "}': " + diagnosticMsg,
+                                    destSheetName,
+                                    destRowIndex,
+                                    destColIndex));
+                        }
                     }
                 }
                 
@@ -3355,6 +3523,17 @@ public class M2SpreadsheetUtils {
                 // since AQL doesn't produce diagnostics for missing Map keys (M2Doc has same limitation)
                 if (value == null && errorMessage == null) {
                     errorMessage = "[WARNING] Expression evaluated to null: May indicate a typo or missing field";
+                    
+                    // Record warning in GenerationResult
+                    if (genResult != null) {
+                        genResult.getValidationMessages().add(
+                            new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage(
+                                io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.WARNING,
+                                "Expression '{m:" + expression + "}' evaluated to null: May indicate a typo or missing field",
+                                destSheetName,
+                                destRowIndex,
+                                destColIndex));
+                    }
                 }
             } else {
                 // Fallback to simple evaluator if no query environment
@@ -3419,17 +3598,20 @@ public class M2SpreadsheetUtils {
      * @return Evaluated rich text with formatting preserved according to the 'm' character rule
      */
     private static RichTextContent evaluateRichTextExpressions(RichTextContent richText, 
-            Map<String, Object> variables, IQueryEnvironment queryEnvironment) {
+            Map<String, Object> variables, IQueryEnvironment queryEnvironment,
+            GenerationResult result, String destSheetName, int destRowIndex, int destColIndex) {
         
         if (richText == null || richText.text == null) {
             return richText;
         }
         
         // Step 1: Process if statements with rich text formatting
-        RichTextContent afterIfs = processIfStatementsRichText(richText, variables, queryEnvironment);
+        RichTextContent afterIfs = processIfStatementsRichText(richText, variables, queryEnvironment,
+                                                                result, destSheetName, destRowIndex, destColIndex);
         
         // Step 2: Process for loops with rich text formatting
-        RichTextContent afterLoops = processForLoopsRichText(afterIfs, variables, queryEnvironment);
+        RichTextContent afterLoops = processForLoopsRichText(afterIfs, variables, queryEnvironment,
+                                                              result, destSheetName, destRowIndex, destColIndex);
         
         // The processForLoopsRichText already handles regular expressions via 
         // processNonLoopExpressionsRichText, so we can just return the result
@@ -3580,5 +3762,116 @@ public class M2SpreadsheetUtils {
         }
         
         return current;
+    }
+    
+    // ========================================
+    // Validation API (M2Doc pattern)
+    // ========================================
+    
+    /**
+     * Validates a template workbook and returns the highest validation level found.
+     * Collects validation messages for all AQL expressions in the template.
+     * 
+     * <p>This method follows the M2Doc validation pattern.</p>
+     * 
+     * @param templateWorkbook
+     *            the template {@link XSSFWorkbook} to validate
+     * @param queryEnvironment
+     *            the {@link IQueryEnvironment} for AQL validation
+     * @param variables
+     *            the variables map for validation context
+     * @param monitor
+     *            the {@link Monitor} for progress tracking
+     * @return the {@link io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel}
+     * @throws IOException if validation fails
+     */
+    public static io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel validate(
+            XSSFWorkbook templateWorkbook,
+            IQueryEnvironment queryEnvironment,
+            Map<String, Object> variables,
+            Monitor monitor) throws IOException {
+        
+        monitor.beginTask("Validating template", 100);
+        
+        try {
+            io.github.nheuermann.m2spreadsheet.validation.M2SpreadsheetValidator validator = 
+                new io.github.nheuermann.m2spreadsheet.validation.M2SpreadsheetValidator(queryEnvironment);
+            
+            io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel level = 
+                validator.validate(templateWorkbook, variables);
+            
+            monitor.worked(100);
+            
+            return level;
+            
+        } finally {
+            monitor.done();
+        }
+    }
+    
+    /**
+     * Generates a validation workbook with validation messages inserted.
+     * Similar to M2Doc's serializeValidatedDocumentTemplate().
+     * 
+     * <p>This creates a workbook with:</p>
+     * <ul>
+     *   <li>A validation summary sheet at the first position (red tab)</li>
+     *   <li>Error cells marked with colored backgrounds (red/yellow/blue)</li>
+     *   <li>Validation messages appended to cell content</li>
+     * </ul>
+     * 
+     * @param templateWorkbook
+     *            the template {@link XSSFWorkbook} to validate
+     * @param queryEnvironment
+     *            the {@link IQueryEnvironment} for AQL validation
+     * @param variables
+     *            the variables map for validation context
+     * @param destinationURI
+     *            the destination {@link URI} for the validation workbook
+     * @param monitor
+     *            the {@link Monitor} for progress tracking
+     * @return the {@link io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel}
+     * @throws IOException if generation fails
+     */
+    public static io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel serializeValidatedWorkbookTemplate(
+            XSSFWorkbook templateWorkbook,
+            IQueryEnvironment queryEnvironment,
+            Map<String, Object> variables,
+            URI destinationURI,
+            Monitor monitor) throws IOException {
+        
+        monitor.beginTask("Generating validation workbook", 100);
+        
+        try {
+            // Step 1: Validate the template
+            io.github.nheuermann.m2spreadsheet.validation.M2SpreadsheetValidator validator = 
+                new io.github.nheuermann.m2spreadsheet.validation.M2SpreadsheetValidator(queryEnvironment);
+            
+            io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel level = 
+                validator.validate(templateWorkbook, variables);
+            
+            monitor.worked(50);
+            
+            // Step 2: Generate validation workbook
+            io.github.nheuermann.m2spreadsheet.validation.TemplateValidationGenerator generator = 
+                new io.github.nheuermann.m2spreadsheet.validation.TemplateValidationGenerator();
+            
+            generator.generateValidationWorkbook(templateWorkbook, validator.getValidationMessages());
+            
+            monitor.worked(30);
+            
+            // Step 3: Save the workbook
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(
+                    new java.io.File(destinationURI.toFileString()))) {
+                templateWorkbook.write(fos);
+            }
+            
+            monitor.worked(20);
+            
+            return level;
+            
+        } finally {
+            monitor.done();
+        }
     }
 }

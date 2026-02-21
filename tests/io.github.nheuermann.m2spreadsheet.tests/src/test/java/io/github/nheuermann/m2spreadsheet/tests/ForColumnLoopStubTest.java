@@ -92,10 +92,10 @@ public class ForColumnLoopStubTest {
                    result.isSuccessful());
         
         // Verify: Should NOT have warnings about for_column (it's now implemented)
-        for (String message : result.getValidationMessages()) {
+        for (io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage message : result.getValidationMessages()) {
             System.out.println("Validation message: " + message);
             assertFalse("Should not have warnings about for_column not being implemented",
-                       message.contains("for_column") && message.contains("not yet implemented"));
+                       message.getMessage().contains("for_column") && message.getMessage().contains("not yet implemented"));
         }
         
         // Verify: Output file exists
@@ -149,8 +149,8 @@ public class ForColumnLoopStubTest {
         
         // Should have no for_column warnings
         boolean hasForColumnWarning = false;
-        for (String message : result.getValidationMessages()) {
-            if (message.contains("for_column")) {
+        for (io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage message : result.getValidationMessages()) {
+            if (message.getMessage().contains("for_column")) {
                 hasForColumnWarning = true;
             }
         }

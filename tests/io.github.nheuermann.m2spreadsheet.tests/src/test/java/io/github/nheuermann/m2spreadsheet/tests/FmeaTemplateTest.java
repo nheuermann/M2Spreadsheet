@@ -240,7 +240,7 @@ public class FmeaTemplateTest {
             }
             if (!result.getValidationMessages().isEmpty()) {
                 System.err.println("Warnings:");
-                for (String msg : result.getValidationMessages()) {
+                for (io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage msg : result.getValidationMessages()) {
                     System.err.println("  - " + msg);
                 }
             }

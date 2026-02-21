@@ -82,6 +82,12 @@ import io.github.nheuermann.m2spreadsheet.util.M2SpreadsheetUtils;
 public abstract class AbstractSpreadsheetsTestSuite {
     
     /**
+     * System property to enable verbose DEBUG output.
+     * Usage: mvn test -Dtest.debug=true -Dtest=FolderBasedTemplatesTest
+     */
+    private static final boolean DEBUG_ENABLED = Boolean.getBoolean("test.debug");
+    
+    /**
      * The test folder path.
      */
     private final String testFolderPath;
@@ -145,7 +151,9 @@ public abstract class AbstractSpreadsheetsTestSuite {
         File testFolder = new File(testFolderPath);
         String folderName = testFolder.getName();
         
-        System.out.println("\n=== Running test case: " + folderName + " ===");
+        System.out.println("\n" + "=".repeat(70));
+        System.out.println("TEST CASE: " + folderName);
+        System.out.println("=".repeat(70));
         
         // Get file paths
         File templateFile = new File(testFolder, folderName + "-template.xlsx");
@@ -158,9 +166,23 @@ public abstract class AbstractSpreadsheetsTestSuite {
             fail("Template file does not exist: " + templateFile.getAbsolutePath());
         }
         
-        System.out.println("Template: " + templateFile.getName());
+        System.out.println("📄 Template: " + templateFile.getName());
+        System.out.println("🔄 Generating...");
         
-        // Load template
+        // Capture System.out to suppress DEBUG output unless requested
+        java.io.PrintStream originalOut = System.out;
+        java.io.ByteArrayOutputStream debugCapture = new java.io.ByteArrayOutputStream();
+        java.io.PrintStream captureStream = new java.io.PrintStream(debugCapture);
+        
+        boolean testPassed = false;
+        
+        // Redirect System.out to capture DEBUG messages
+        if (!DEBUG_ENABLED) {
+            System.setOut(captureStream);
+        }
+        
+        try {
+            // Load template
         XSSFWorkbook templateWorkbook;
         try (FileInputStream fis = new FileInputStream(templateFile)) {
             templateWorkbook = new XSSFWorkbook(fis);
@@ -171,8 +193,6 @@ public abstract class AbstractSpreadsheetsTestSuite {
         if (variables == null) {
             variables = new HashMap<>();
         }
-        
-        System.out.println("Variables: " + variables.keySet());
         
         // Setup query environment
         ResourceSet resourceSet = new ResourceSetImpl();
@@ -193,49 +213,93 @@ public abstract class AbstractSpreadsheetsTestSuite {
         
         // Report generation result
         if (!result.isSuccessful()) {
-            System.err.println("Generation FAILED:");
+            System.err.println("\n❌ GENERATION FAILED:");
             for (Exception error : result.getGenerationErrors()) {
-                System.err.println("  ERROR: " + error.getMessage());
-                error.printStackTrace();
+                System.err.println("   • " + error.getMessage());
             }
+        } else {
+            System.out.println("✅ Generation successful");
         }
         
+        // Report validation messages (part of normal generation now)
         if (!result.getValidationMessages().isEmpty()) {
-            System.out.println("Validation messages:");
-            for (String message : result.getValidationMessages()) {
-                System.out.println("  " + message);
+            int errorCount = 0;
+            int warningCount = 0;
+            for (io.github.nheuermann.m2spreadsheet.validation.TemplateValidationMessage message : result.getValidationMessages()) {
+                if (message.getLevel() == io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.ERROR) {
+                    errorCount++;
+                } else if (message.getLevel() == io.github.nheuermann.m2spreadsheet.validation.ValidationMessageLevel.WARNING) {
+                    warningCount++;
+                }
             }
+            
+            System.out.println("\n⚠️  Validation issues found:");
+            if (errorCount > 0) {
+                System.out.println("   Errors: " + errorCount);
+            }
+            if (warningCount > 0) {
+                System.out.println("   Warnings: " + warningCount);
+            }
+            System.out.println("   (See Errors sheet in generated file for details)");
         }
         
         // Verify generated file exists
         assertTrue("Generated file should exist: " + generatedFile.getName(), 
                    generatedFile.exists());
         
-        System.out.println("✓ Generated: " + generatedFile.getName());
+        System.out.println("📦 Generated: " + generatedFile.getName());
         
         // Compare with expected if it exists
         if (expectedFile.exists()) {
-            System.out.println("Expected: " + expectedFile.getName());
+            System.out.println("📋 Expected:  " + expectedFile.getName());
+            System.out.println("\n🔍 Comparing generated vs expected...");
             
             boolean filesMatch = compareSpreadsheets(expectedFile, generatedFile, diffFile);
             
             if (filesMatch) {
-                System.out.println("✓ Generated output matches expected");
+                testPassed = true;
+                System.setOut(originalOut);  // Restore output for pass message
+                System.out.println("\n" + "─".repeat(70));
+                System.out.println("✅ TEST PASSED - Output matches expected");
+                System.out.println("─".repeat(70));
                 // Clean up diff file if exists from previous run
                 if (diffFile.exists()) {
                     diffFile.delete();
                 }
             } else {
-                System.err.println("✗ Generated output differs from expected");
-                System.err.println("  See diff file: " + diffFile.getName());
+                System.setOut(originalOut);  // Restore output for fail message
+                System.out.println("\n" + "─".repeat(70));
+                System.err.println("❌ TEST FAILED - Output differs from expected");
+                System.err.println("   📄 Diff file: " + diffFile.getName());
+                System.err.println("   💡 Review the diff file to see what changed");
+                System.err.println("   💬 To see DEBUG output, run: mvn test -Dtest.debug=true");
+                System.out.println("─".repeat(70));
                 fail("Generated output does not match expected. See: " + diffFile.getAbsolutePath());
             }
         } else {
-            System.out.println("NOTE: No expected file to compare against.");
-            System.out.println("      Create " + expectedFile.getName() + " to enable comparison.");
+            testPassed = true;
+            System.setOut(originalOut);  // Restore output for message
+            System.out.println("\n" + "─".repeat(70));
+            System.out.println("ℹ️  No expected file - skipping comparison");
+            System.out.println("   Create " + expectedFile.getName() + " to enable comparison");
+            System.out.println("─".repeat(70));
         }
         
-        System.out.println("=== Test case complete: " + folderName + " ===\n");
+        } finally {
+            // Always restore System.out
+            System.setOut(originalOut);
+            
+            // Print DEBUG output only if explicitly enabled
+            if (DEBUG_ENABLED) {
+                String debugOutput = debugCapture.toString();
+                if (!debugOutput.isEmpty()) {
+                    System.out.println("\n" + "═".repeat(70));
+                    System.out.println("DEBUG OUTPUT:");
+                    System.out.println("═".repeat(70));
+                    System.out.print(debugOutput);
+                }
+            }
+        }
     }
     
     /**
@@ -430,7 +494,41 @@ public abstract class AbstractSpreadsheetsTestSuite {
         
         diffWb.close();
         
-        System.out.println("Created diff file with " + differences.size() + " difference(s)");
+        System.out.println("   📊 " + differences.size() + " difference(s) found");
+    }
+    
+    /**
+     * Generates a validation workbook for debugging template issues.
+     * This creates a "-validation.xlsx" file with visual error markers.
+     * 
+     * @param templateFile the template file
+     * @param validationFile the validation output file 
+     * @param queryEnv the query environment
+     * @param variables the variables map
+     * @throws IOException if file operations fail
+     */
+    private void generateValidationWorkbook(File templateFile, File validationFile, 
+            IQueryEnvironment queryEnv, Map<String, Object> variables) throws IOException {
+        
+        System.out.println("Generating validation workbook: " + validationFile.getName());
+        
+        // Load template
+        XSSFWorkbook templateWorkbook;
+        try (FileInputStream fis = new FileInputStream(templateFile)) {
+            templateWorkbook = new XSSFWorkbook(fis);
+        }
+        
+        // Generate validation workbook
+        URI validationURI = URI.createFileURI(validationFile.getAbsolutePath());
+        M2SpreadsheetUtils.serializeValidatedWorkbookTemplate(
+            templateWorkbook,
+            queryEnv,
+            variables,
+            validationURI,
+            new BasicMonitor()
+        );
+        
+        System.out.println("✓ Created: " + validationFile.getName());
     }
     
     /**

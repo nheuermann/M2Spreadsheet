@@ -33,6 +33,27 @@ This script will verify:
 - Git installation
 - VS Code and recommended extensions (optional)
 - Project structure and required libraries
+- Local Maven repository setup
+
+### First-Time Setup
+
+**Important:** After cloning the repository, you must install local dependencies to your Maven repository:
+
+**Unix/macOS:**
+```bash
+./setup-local-dependencies.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+.\setup-local-dependencies.ps1
+```
+
+This one-time setup installs the following JARs from `libs/` into your local Maven repository (`~/.m2/repository`):
+- `org.eclipse.acceleo.query-7.0.0.jar` - Acceleo Query Language
+- `antlr4-runtime-4.7.2.jar` - ANTLR4 Runtime
+
+**Note:** This step must be performed on each new system where you clone the repository.
 
 ## Building the Project
 
@@ -184,6 +205,103 @@ Used with for_row loops:
 ```
 {m:for_row req | requirements}{m:if req.traces->includes(event.id)}X{m:elseif req.traces->size() > 0}?{m:else}-{m:endif}{m:endfor_row}
 ```
+
+## Error Reporting and Validation
+
+### Errors Sheet
+
+M2Spreadsheet automatically creates an **"Errors" sheet** in generated workbooks whenever errors or warnings occur during generation. This sheet provides a comprehensive overview of all problems with clickable links to jump directly to the problem cells.
+
+**Features**:
+* **Automatic creation**: Added as the first sheet (with a red tab) when errors/warnings are detected
+* **No errors**: If generation completes successfully without any issues, no Errors sheet is created
+* **Clickable hyperlinks**: The "Location" column contains hyperlinks that jump directly to the problem cell in the generated workbook
+* **Severity levels**: 
+  - `ERROR` - Critical issues that may produce incorrect output (e.g., undefined variables, invalid expressions)
+  - `WARNING` - Non-critical issues that may indicate typos or unexpected behavior (e.g., null evaluations)
+
+**Errors Sheet Format**:
+
+| Severity | Location | Message |
+|----------|----------|---------|
+| ERROR | Sheet1!A10 | Expression '{m:cause.name}': [ERROR] Couldn't find the 'cause' variable |
+| WARNING | Sheet1!B5 | Expression '{m:ref.datex}' evaluated to null: May indicate a typo or missing field |
+
+**When errors are detected**:
+1. **Cell content**: The problem expression is written to the cell along with an error message
+2. **Errors sheet**: An entry is created with:
+   - **Severity**: ERROR or WARNING level
+   - **Location**: The exact cell reference in the generated workbook (as a clickable hyperlink)
+   - **Message**: Detailed description of the problem
+
+**Column details**:
+* **Severity**: Color-coded text (red for ERROR, orange for WARNING) indicating the problem level
+* **Location**: Clickable hyperlink in the format `SheetName!A1` - click to jump directly to the problem cell
+* **Message**: Full error description including:
+  - The expression that caused the problem
+  - Diagnostic information from the AQL evaluator
+  - Helpful hints for common issues (e.g., "May indicate a typo or missing field" for null evaluations)
+
+**Common error scenarios**:
+
+*Undefined variable*:
+```
+Template: {m:cause.name}
+Error: Couldn't find the 'cause' variable
+Cause: Variable 'cause' is not in scope (e.g., loop variable from parent cell not available)
+```
+
+*Null evaluation (potential typo)*:
+```
+Template: {m:ref.datex}
+Warning: Expression evaluated to null: May indicate a typo or missing field
+Cause: Property 'datex' doesn't exist (should be 'date'?), or the value is legitimately null
+```
+
+*Missing endfor*:
+```
+Template: {m:for item | items}...
+Error: Missing {m:endfor} in the same cell
+Cause: For loops must be closed in the same cell where they're opened
+```
+
+**Best practices**:
+* Always check the Errors sheet after generation to catch typos and logic errors
+* Click the Location links to see the actual problem in context
+* Pay attention to WARNING messages - they often indicate typos in property names
+* For null warnings: verify the property name is correct and the data exists
+
+### Template Validation (Preview Mode)
+
+In addition to the runtime Errors sheet, M2Spreadsheet provides a **validation-only mode** that checks templates without generating output:
+
+**Use case**: Preview potential errors before running full generation with actual data
+
+**Usage**:
+```java
+GenerationResult validationResult = M2SpreadsheetUtils.serializeValidatedWorkbookTemplate(
+    templateWorkbook,
+    queryEnvironment, 
+    variables,
+    monitor
+);
+
+// Check for errors
+if (validationResult.getValidationMessageLevel() == ValidationMessageLevel.ERROR) {
+    System.err.println("Template has errors!");
+}
+```
+
+**Output**: A validation-only workbook where problematic cells are annotated with:
+* Visual highlighting of cells containing errors/warnings
+* Inline comments with diagnostic information
+* No actual data evaluation (uses placeholder values)
+
+**Difference from Errors sheet**:
+* **Validation mode**: Checks template structure and syntax before generation, annotates template cells
+* **Errors sheet**: Captures runtime errors during actual generation, points to output cells with real data
+
+Both modes help catch issues, but the Errors sheet is more useful for production generation since it shows problems at their final output locations.
 
 ### Rich text formatting
 
